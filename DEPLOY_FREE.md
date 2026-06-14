@@ -276,16 +276,12 @@ wscat -c "wss://alexa-india.duckdns.org/ws?home_id=demo_home_001"
 
 ---
 
-## STEP 12 — Update Backend CORS
+## STEP 12 — Update Backend CORS ✓ Already done
 
-On your **laptop**, edit `C:\Users\arman\Desktop\alexa2\backend\src\index.ts`.
+`backend/src/index.ts` already has the correct CORS config allowing all `.vercel.app` domains
+and any URL set in the `ALLOWED_ORIGINS` environment variable. No changes needed here.
 
-Replace line 14:
-```typescript
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] }));
-```
-
-With:
+For reference, the active code looks like this:
 ```typescript
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
@@ -296,7 +292,7 @@ const ALLOWED_ORIGINS = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.amplifyapp.com')) {
+    if (ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.vercel.app')) {
       return callback(null, true);
     }
     callback(new Error(`CORS: origin ${origin} not allowed`));
@@ -308,10 +304,9 @@ app.use(cors({
 
 ---
 
-## STEP 13 — Create Frontend Production Config
+## STEP 13 — Create Frontend Production Config ✓ Already done
 
-Create this file: `C:\Users\arman\Desktop\Alexa2Frontend\alexa-digital-twin\.env.production`
-
+`C:\Users\arman\Desktop\Alexa2Frontend\alexa-digital-twin\.env.production` already exists:
 ```env
 VITE_API_BASE_URL=https://alexa-india.duckdns.org
 VITE_WS_URL=wss://alexa-india.duckdns.org
@@ -319,83 +314,50 @@ VITE_WS_URL=wss://alexa-india.duckdns.org
 
 ---
 
-## STEP 14 — Push Both Repos to GitHub
+## STEP 14 — Add vercel.json for SPA Routing ✓ Already done
 
-```powershell
-# Backend — push CORS fix
-cd C:\Users\arman\Desktop\alexa2
-git add backend/src/index.ts
-git commit -m "Update CORS for Amplify production domain"
-git push origin main
-
-# Frontend — push production env
-cd C:\Users\arman\Desktop\Alexa2Frontend\alexa-digital-twin
-git add .env.production
-git commit -m "Add production env pointing to EC2 backend"
-git push origin master
-```
+`vercel.json` is already committed in `alexa-digital-twin/`. It tells Vercel to serve
+`index.html` for all routes so page refreshes don't 404.
 
 ---
 
-## STEP 15 — Deploy Frontend on AWS Amplify
+## STEP 15 — Push Both Repos to GitHub ✓ Already done
 
-1. AWS Console → **Amplify → New app → Host web app**
-2. Source: **GitHub** → Authorize → pick `Arman-Saini/Alexa2Frontend` → branch: `master`
-3. Build settings — confirm it looks like this (edit if needed):
+Both repos have been pushed with the correct production config.
 
-```yaml
-version: 1
-frontend:
-  phases:
-    preBuild:
-      commands:
-        - cd alexa-digital-twin
-        - npm ci
-    build:
-      commands:
-        - npm run build
-  artifacts:
-    baseDirectory: alexa-digital-twin/dist
-    files:
-      - '**/*'
-  cache:
-    paths:
-      - alexa-digital-twin/node_modules/**/*
-```
+---
 
-4. Scroll to **Environment variables** → Add:
+## STEP 16 — Deploy Frontend on Vercel
 
-   | Key | Value |
+1. Go to **vercel.com** → sign in with GitHub
+2. Click **Add New → Project**
+3. Find and import `Arman-Saini/Alexa2Frontend`
+4. **Configure project**:
+   - **Root Directory** → click Edit → type `alexa-digital-twin` → Save
+   - Framework Preset will auto-detect as **Vite** ✓
+   - Build Command: `npm run build` (auto-filled)
+   - Output Directory: `dist` (auto-filled)
+5. Expand **Environment Variables** → add both:
+
+   | Name | Value |
    |---|---|
    | `VITE_API_BASE_URL` | `https://alexa-india.duckdns.org` |
    | `VITE_WS_URL` | `wss://alexa-india.duckdns.org` |
 
-5. **Save and deploy** (~3 minutes)
-6. Copy your Amplify URL: `https://main.XXXX.amplifyapp.com`
+6. Click **Deploy** — takes ~2 minutes
+7. Vercel gives you a URL like `https://alexa2-frontend.vercel.app`
+
+> Every future `git push origin master` automatically triggers a new Vercel deployment.
 
 ---
 
-## STEP 16 — Fix SPA Page Refresh (Required)
+## STEP 17 — Add Your Vercel URL to Backend CORS
 
-Amplify Console → your app → **Rewrites and redirects → Add rule**:
-
-| Source | Target | Type |
-|---|---|---|
-| `</^[^.]+$\|\.(?!(css\|gif\|ico\|jpg\|js\|png\|txt\|svg\|woff\|ttf\|map\|json)$)([^.]+$)/>` | `/index.html` | `200 (Rewrite)` |
-
-**Save**
-
----
-
-## STEP 17 — Add Amplify URL to Backend CORS
-
-SSH back into EC2:
+Once you have the Vercel URL, SSH into EC2 and restart the container with it.
 
 ```powershell
 ssh -i "C:\Users\arman\Downloads\alexa-india-key.pem" ec2-user@YOUR_ELASTIC_IP
 ```
-
-Restart the container with your Amplify URL (replace `main.XXXX`):
 
 ```bash
 docker stop alexa-backend && docker rm alexa-backend
@@ -410,22 +372,39 @@ docker run -d \
   -e POLLY_DEFAULT_VOICE=kajal \
   -e NODE_ENV=production \
   -e PORT=3001 \
-  -e ALLOWED_ORIGINS=https://main.XXXX.amplifyapp.com \
+  -e ALLOWED_ORIGINS=https://alexa2-frontend.vercel.app \
   116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
 ```
+
+Replace `https://alexa2-frontend.vercel.app` with your actual Vercel URL.
+
+> All `*.vercel.app` preview URLs (created on every PR) are also auto-allowed by the CORS
+> code — you only need `ALLOWED_ORIGINS` for your custom domain if you add one later.
 
 ---
 
 ## STEP 18 — Final Check
 
-Open `https://main.XXXX.amplifyapp.com` in your browser.
-- 3D home should load
-- Voice commands should play Indian English Polly audio
-- Device toggles should reflect in the 3D view
+Open your Vercel URL in the browser and confirm:
+- 3D home renders
+- Voice commands trigger and play Indian English Polly audio
+- Device toggles update in the 3D view
+- T3 escalations call real Bedrock (check browser network tab — no `is_mock: true`)
+
+Quick API smoke test from your **laptop PowerShell**:
 
 ```powershell
-# Quick smoke test from PowerShell
-Invoke-RestMethod "https://alexa-india.duckdns.org/api/health"
+$BASE = "https://alexa-india.duckdns.org/api"
+Invoke-RestMethod "$BASE/health"
+Invoke-RestMethod -Method Post "$BASE/homes/demo_home_001/seed"
+Invoke-RestMethod -Method Post "$BASE/simulate/geyser" `
+  -ContentType "application/json" `
+  -Body '{"home_id":"demo_home_001","outdoor_temp":18}'
+```
+
+WebSocket test (run `npm install -g wscat` first):
+```powershell
+wscat -c "wss://alexa-india.duckdns.org/ws?home_id=demo_home_001"
 ```
 
 ---
@@ -434,15 +413,16 @@ Invoke-RestMethod "https://alexa-india.duckdns.org/api/health"
 
 | | URL |
 |---|---|
-| Backend API | `https://alexa-india.duckdns.org` |
-| WebSocket | `wss://alexa-india.duckdns.org/ws?home_id=demo_home_001` |
-| Frontend | `https://main.XXXX.amplifyapp.com` |
+| **Backend API** | `https://alexa-india.duckdns.org` |
+| **Backend Health** | `https://alexa-india.duckdns.org/api/health` |
+| **WebSocket** | `wss://alexa-india.duckdns.org/ws?home_id=demo_home_001` |
+| **Frontend** | `https://alexa2-frontend.vercel.app` |
 
 ---
 
-## Updating the backend after code changes
+## Updating the Backend After Code Changes
 
-On your laptop — rebuild and push to ECR:
+On your **laptop** — rebuild and push to ECR:
 
 ```powershell
 cd C:\Users\arman\Desktop\alexa2\backend
@@ -455,7 +435,7 @@ docker tag alexa-india-backend:latest 116137269322.dkr.ecr.us-east-1.amazonaws.c
 docker push 116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
 ```
 
-Then SSH into EC2 and run:
+SSH into EC2 and pull the new image:
 
 ```bash
 aws ecr get-login-password --region us-east-1 | \
@@ -474,9 +454,32 @@ docker run -d \
   -e POLLY_DEFAULT_VOICE=kajal \
   -e NODE_ENV=production \
   -e PORT=3001 \
-  -e ALLOWED_ORIGINS=https://main.XXXX.amplifyapp.com \
+  -e ALLOWED_ORIGINS=https://alexa2-frontend.vercel.app \
   116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
 ```
+
+## Updating the Frontend After Code Changes
+
+Just push to GitHub — Vercel auto-deploys on every push:
+
+```powershell
+cd C:\Users\arman\Desktop\Alexa2Frontend\alexa-digital-twin
+git add .
+git commit -m "your message"
+git push origin master
+```
+
+---
+
+## What Would Have Been Different If We Knew Vercel From the Start
+
+| Item | What changed |
+|---|---|
+| `backend/src/index.ts` CORS | `.amplifyapp.com` → `.vercel.app` |
+| `vercel.json` | Added to frontend (handles SPA routing — replaces Amplify rewrite rule) |
+| No AWS Amplify setup needed | Saves ~10 minutes and avoids the YAML build spec |
+| `.env.production` | Same either way |
+| Backend EC2 deployment | Identical — Vercel only affects the frontend |
 
 ---
 
@@ -484,25 +487,29 @@ docker run -d \
 
 **SSH says permission denied**
 - Run the `icacls` command from Step 5 first
-- Make sure you're using `ec2-user` not `root`
+- Use `ec2-user` not `root`
 
-**`curl http://alexa-india.duckdns.org` times out**
-- Wait 5 min for DNS to propagate after setting DuckDNS
-- Confirm security group has port 80 open
+**`http://alexa-india.duckdns.org` times out**
+- Security group must have port 80 open (EC2 → Security Groups → add HTTP rule)
+- Wait 5 min after updating DuckDNS for DNS to propagate
 
 **Certbot fails**
-- Port 80 must be reachable from the internet before running certbot
-- Run Step 9 HTTP test first and confirm it works
+- Port 80 must work before running certbot — test Step 9 HTTP check first
 
 **Bedrock AccessDeniedException on EC2**
 - EC2 console → Instance → Security tab → confirm IAM role is `AlexaIndiaEC2Role`
-- Check the inline policy has `bedrock:InvokeModel`
+- Role must have `bedrock:InvokeModel` in its inline policy
 
 **Docker container not starting**
 ```bash
 docker logs alexa-backend
 ```
 
-**WebSocket fails from Amplify**
-- Must be `wss://` not `ws://` in `.env.production`
-- ALLOWED_ORIGINS must match your Amplify URL exactly (no trailing slash)
+**WebSocket fails from Vercel frontend**
+- `.env.production` must use `wss://` not `ws://`
+- `ALLOWED_ORIGINS` on EC2 must match your Vercel URL exactly (no trailing slash)
+- Check browser DevTools → Console for CORS errors
+
+**Vercel build fails**
+- Confirm Root Directory is set to `alexa-digital-twin` in Vercel project settings
+- Run `npm run build` locally in that folder first to catch TypeScript errors
