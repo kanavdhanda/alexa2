@@ -33,6 +33,36 @@ type ConditionEvaluator = (params: Record<string, any>, event: EventPayload, hom
 
 const CONDITION_EVALUATORS: Record<string, ConditionEvaluator> = {
 
+  // Device property checks — only fire on sensor_trigger events for this device
+  property_gt: (params, event, home) => {
+    if (event.event_type !== 'sensor_trigger') return false;
+    const sensor = event.data?.sensor;
+    const device = home.devices[params.device_id];
+    if (!device) return false;
+    // Must be a sensor event for this specific device or device type
+    if (sensor !== params.device_id && !params.device_id.endsWith(`_${sensor}`)) return false;
+    const val = device.properties[params.property]?.current_value;
+    return val !== undefined && Number(val) > params.threshold;
+  },
+  property_lt: (params, event, home) => {
+    if (event.event_type !== 'sensor_trigger') return false;
+    const sensor = event.data?.sensor;
+    const device = home.devices[params.device_id];
+    if (!device) return false;
+    if (sensor !== params.device_id && !params.device_id.endsWith(`_${sensor}`)) return false;
+    const val = device.properties[params.property]?.current_value;
+    return val !== undefined && Number(val) < params.threshold;
+  },
+  property_eq: (params, event, home) => {
+    if (event.event_type !== 'sensor_trigger') return false;
+    const sensor = event.data?.sensor;
+    const device = home.devices[params.device_id];
+    if (!device) return false;
+    if (sensor !== params.device_id && !params.device_id.endsWith(`_${sensor}`)) return false;
+    const val = device.properties[params.property]?.current_value;
+    return val === params.value;
+  },
+
   // "sensor value exceeds threshold" — e.g., duration > 45, battery < 10
   sensor_threshold: (params, event) => {
     const { sensor, property, operator, threshold } = params;
@@ -92,8 +122,53 @@ const CONDITION_EVALUATORS: Record<string, ConditionEvaluator> = {
 
 // ─── T0 engine ────────────────────────────────────────────────────────────────
 
+/**
+ * For sensor_trigger events: sync reported sensor values into device state
+ * so property_gt/lt/eq condition evaluators can read fresh values.
+ */
+function syncSensorEventToDeviceState(event: EventPayload): void {
+  if (event.event_type !== 'sensor_trigger') return;
+  const { home_id, data } = event;
+  if (!data?.sensor) return;
+
+  const home = stateStore.get(home_id);
+
+  // Try to find device by exact device_id match first, then by type
+  const device = home.devices[data.sensor]
+    || Object.values(home.devices).find(d => d.type === data.sensor || d.device_id.endsWith(`_${data.sensor}`));
+
+  if (!device) return;
+
+  // Sync all observable numeric/bool properties present in event data
+  const SYNC_FIELDS: Record<string, string> = {
+    duration:        'duration_minutes',
+    battery_percent: 'battery_percent',
+    tank_level:      'tank_level_percent',
+    tank_level_percent: 'tank_level_percent',
+    tds_ppm:         'tds_ppm',
+    filter_life:     'filter_life_percent',
+    load_watts:      'load_watts',
+    leak_detected:   'leak_detected',
+    smoke_detected:  'smoke_detected',
+    tamper_detected: 'tamper_detected',
+    on_battery:      'on_battery',
+    motion_detected: 'motion_detected',
+    whistle_count:   'whistle_count',
+  };
+
+  for (const [dataKey, propKey] of Object.entries(SYNC_FIELDS)) {
+    if (data[dataKey] !== undefined && device.properties[propKey] !== undefined) {
+      stateStore.setDeviceProperty(home_id, device.device_id, propKey, data[dataKey]);
+    }
+  }
+}
+
 export function runT0RuleEngine(event: EventPayload): T0Result | null {
   const t0 = process.hrtime.bigint();
+
+  // Pre-process: update device state from sensor data so property_gt/lt/eq work
+  syncSensorEventToDeviceState(event);
+
   const home = stateStore.get(event.home_id);
 
   for (const rule of home.t0_rules) {

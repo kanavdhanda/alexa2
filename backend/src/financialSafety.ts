@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 /**
  * Financial Safety Wrapper — Goal 6
  * 1. MOCK_LLM=true  → bypass Bedrock entirely, return hardcoded response
@@ -87,7 +90,8 @@ class FinancialSafetyWrapper {
     }
   }
 
-  isMockMode(): boolean { return this.isMock; }
+  // Always read live from env so it can be toggled without restart in tests
+  isMockMode(): boolean { return process.env.MOCK_LLM === 'true'; }
 
   getMockResult(anomaly_description: string): SupervisorResult {
     return buildMockResult(anomaly_description);
