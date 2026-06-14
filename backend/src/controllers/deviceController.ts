@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { stateStore } from '../stateStore';
 import { createDeviceFromTemplate, generateAutoT0Rules, validatePropertyUpdate, DEVICE_TYPE_CATALOG } from '../deviceRegistry';
 import { wsServer } from '../websocket';
+import { appStore } from '../appStore';
 
 export function listDeviceTypes(_req: Request, res: Response) {
   return res.json({
@@ -26,13 +27,41 @@ export function registerDevice(req: Request, res: Response) {
     return res.status(400).json({ error: `Unknown device type: ${type}`, available_types: Object.keys(DEVICE_TYPE_CATALOG) });
   }
 
+  const { brand, model } = req.body;
+
   const device = createDeviceFromTemplate(device_id, type, room_id, { friendly_name, ...overrides });
   stateStore.registerDevice(home_id, device);
 
-  // Auto-generate T0 rules for this device
+  // Auto-generate T0 rules from device registry
   const autoRules = generateAutoT0Rules(device);
   for (const rule of autoRules) {
     stateStore.addT0Rule(home_id, rule);
+  }
+
+  // Auto-attach app store module if a match exists
+  let module_attached: { module_id: string; name: string; extra_rules: number } | null = null;
+  const matchedModule = appStore.findMatch(type, brand, model);
+  if (matchedModule) {
+    appStore.install(home_id, matchedModule.module_id);
+    let extra_rules = 0;
+    for (const ruleSpec of matchedModule.mcp_definition.auto_t0_rules) {
+      const rule_id = `${device_id}_module_${ruleSpec.rule_id_suffix}`;
+      if (!autoRules.find(r => r.rule_id === rule_id)) {
+        stateStore.addT0Rule(home_id, {
+          rule_id,
+          description: `[${matchedModule.name}] ${ruleSpec.description}`,
+          condition_fn_key: ruleSpec.condition_fn_key,
+          condition_params: ruleSpec.condition_params_fn(device_id),
+          action: { device_id, property: ruleSpec.action_property, value: ruleSpec.action_value },
+          confidence: ruleSpec.confidence,
+          promoted_from_t3: false,
+          created_at: new Date().toISOString(),
+          trigger_count: 0,
+        });
+        extra_rules++;
+      }
+    }
+    module_attached = { module_id: matchedModule.module_id, name: matchedModule.name, extra_rules };
   }
 
   wsServer?.broadcastDeviceUpdate(home_id, device_id, 'registered', device);
@@ -42,6 +71,7 @@ export function registerDevice(req: Request, res: Response) {
     device,
     auto_t0_rules_generated: autoRules.length,
     rules: autoRules,
+    module_attached,
   });
 }
 

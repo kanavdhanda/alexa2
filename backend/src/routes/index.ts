@@ -7,6 +7,7 @@ import { listRooms, createRoom, getRoom, updateOccupancy } from '../controllers/
 import { getRegime, forceRegime, refreshRegime } from '../controllers/regimeController';
 import { runMiner, listProposedRules, confirmRule, rejectRule, listT0Rules } from '../controllers/minerController';
 import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhrasesAudio } from '../controllers/voiceController';
+import { listModules, getModule, listCategories, getStoreStats, installModule, getInstalledModules, publishModule, generateModuleWithAI, getModuleTemplate } from '../controllers/appStoreController';
 
 const router = Router();
 
@@ -59,6 +60,17 @@ router.get('/voice/speak', textToSpeechGet);
 router.post('/voice/speak', textToSpeech);
 router.post('/voice/respond', speakEventResult);
 router.get('/voice/demo-phrases', demoPhrasesAudio);
+
+// ── App Store (MCP Module Marketplace) ───────────────────────────────────────
+router.get('/app-store/stats', getStoreStats);
+router.get('/app-store/categories', listCategories);
+router.get('/app-store/modules', listModules);
+router.post('/app-store/modules', publishModule);
+router.get('/app-store/modules/template', getModuleTemplate);
+router.post('/app-store/generate-module', generateModuleWithAI);
+router.get('/app-store/modules/:module_id', getModule);
+router.post('/app-store/modules/:module_id/install/:home_id', installModule);
+router.get('/homes/:home_id/modules', getInstalledModules);
 
 // ── Hackathon demo scenarios ──────────────────────────────────────────────────
 router.post('/simulate/geyser', simulateGeyser);
