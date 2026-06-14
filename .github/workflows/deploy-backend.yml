@@ -68,7 +68,16 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@v4
-      - name: SSH — pull new image and restart container
+      - name: Copy docker-compose.prod.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: backend/docker-compose.prod.yml
+          target: /home/ec2-user/
+          strip_components: 1
+      - name: SSH — pull new image and restart via docker compose
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -80,20 +89,9 @@ jobs:
               docker login --username AWS \
                            --password-stdin 116137269322.dkr.ecr.us-east-1.amazonaws.com
             docker pull 116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
-            docker stop alexa-backend 2>/dev/null || true
-            docker rm   alexa-backend 2>/dev/null || true
-            docker run -d \
-              --name alexa-backend \
-              --restart unless-stopped \
-              -p 3001:3001 \
-              -e AWS_REGION=us-east-1 \
-              -e BEDROCK_MODEL_ID=amazon.nova-micro-v1:0 \
-              -e MOCK_LLM=false \
-              -e POLLY_DEFAULT_VOICE=kajal \
-              -e NODE_ENV=production \
-              -e PORT=3001 \
-              -e "ALLOWED_ORIGINS=https://alexa2-frontend.vercel.app" \
-              116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
+            cd /home/ec2-user
+            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
+            docker system prune -f
             echo "Waiting for backend to become healthy..."
             for i in $(seq 1 12); do
               if curl -sf http://localhost:3001/api/health > /dev/null; then
@@ -104,5 +102,5 @@ jobs:
               sleep 5
             done
             echo "Backend did not become healthy in time"
-            docker logs alexa-backend --tail=50
+            docker compose -f docker-compose.prod.yml logs --tail=50
             exit 1
