@@ -90,8 +90,11 @@ jobs:
                            --password-stdin 116137269322.dkr.ecr.us-east-1.amazonaws.com
             docker pull 116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
             cd /home/ec2-user
-            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
-            docker system prune -f
+            sudo docker stop alexa-backend 2>/dev/null || true
+            sudo docker rm -f alexa-backend 2>/dev/null || true
+            sudo docker compose -f docker-compose.prod.yml down 2>/dev/null || true
+            sudo docker compose -f docker-compose.prod.yml up --build -d
+            sudo docker system prune -f
             echo "Waiting for backend to become healthy..."
             for i in $(seq 1 12); do
               if curl -sf http://localhost:3001/api/health > /dev/null; then
@@ -102,5 +105,5 @@ jobs:
               sleep 5
             done
             echo "Backend did not become healthy in time"
-            docker compose -f docker-compose.prod.yml logs --tail=50
+            sudo docker compose -f docker-compose.prod.yml logs --tail=50
             exit 1
