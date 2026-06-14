@@ -27,27 +27,28 @@ app.use((_req, res) => {
   res.status(404).json({ error: 'Not found', docs: '/api/health', websocket: 'ws://localhost:PORT/ws?home_id=<id>' });
 });
 
-// Create HTTP server (required for WebSocket to share the same port)
-const server = http.createServer(app);
-initWebSocket(server);
-
-server.listen(PORT, () => {
-  const mockLabel = financialSafety.isMockMode() ? ' [MOCK_LLM=true — no real Bedrock calls]' : ' [LIVE — Bedrock enabled]';
-  console.log(`\n╔══════════════════════════════════════════════════════════╗`);
-  console.log(`║   Alexa+ India Context Layer — Backend API v2            ║`);
-  console.log(`║   HTTP  → http://localhost:${PORT}/api/health              ║`);
-  console.log(`║   WS    → ws://localhost:${PORT}/ws?home_id=demo_home_001  ║`);
-  console.log(`║   T0 Rule Engine    : ACTIVE (<10ms, $0)                 ║`);
-  console.log(`║   T1 Local NLU      : ACTIVE (<100ms, $0)                ║`);
-  console.log(`║   T3 Bedrock Agent  : ${mockLabel.padEnd(32)}║`);
-  console.log(`║   Amazon Polly TTS  : ${financialSafety.isMockMode() ? 'MOCK MODE                    ' : 'ACTIVE (Indian English voice) '}║`);
-  console.log(`╚══════════════════════════════════════════════════════════╝\n`);
-  console.log(`Quick start: POST http://localhost:${PORT}/api/homes/demo_home_001/seed`);
-  console.log(`Then try:    POST http://localhost:${PORT}/api/simulate/geyser\n`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => { server.close(() => process.exit(0)); });
-process.on('SIGINT',  () => { server.close(() => process.exit(0)); });
-
 export default app;
+
+// Only start the server when run directly (not when imported by tests)
+if (require.main === module) {
+  const server = http.createServer(app);
+  initWebSocket(server);
+
+  server.listen(PORT, () => {
+    const mockLabel = financialSafety.isMockMode() ? ' [MOCK_LLM=true — no real Bedrock calls]' : ' [LIVE — Bedrock enabled]';
+    console.log(`\n╔══════════════════════════════════════════════════════════╗`);
+    console.log(`║   Alexa+ India Context Layer — Backend API v2            ║`);
+    console.log(`║   HTTP  → http://localhost:${PORT}/api/health              ║`);
+    console.log(`║   WS    → ws://localhost:${PORT}/ws?home_id=demo_home_001  ║`);
+    console.log(`║   T0 Rule Engine    : ACTIVE (<10ms, $0)                 ║`);
+    console.log(`║   T1 Local NLU      : ACTIVE (<100ms, $0)                ║`);
+    console.log(`║   T3 Bedrock Agent  : ${mockLabel.padEnd(32)}║`);
+    console.log(`║   Amazon Polly TTS  : ${financialSafety.isMockMode() ? 'MOCK MODE                    ' : 'ACTIVE (Indian English voice) '}║`);
+    console.log(`╚══════════════════════════════════════════════════════════╝\n`);
+    console.log(`Quick start: POST http://localhost:${PORT}/api/homes/demo_home_001/seed`);
+    console.log(`Then try:    POST http://localhost:${PORT}/api/simulate/geyser\n`);
+  });
+
+  process.on('SIGTERM', () => { server.close(() => process.exit(0)); });
+  process.on('SIGINT',  () => { server.close(() => process.exit(0)); });
+}

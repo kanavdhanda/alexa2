@@ -42,6 +42,7 @@ Browser (dumb terminal — ZERO computation)
 │  Amazon Polly TTS  →  audio/mpeg base64          │
 │  WebSocket         →  real-time event push        │
 │  Dynamic Device Registry  →  any device type      │
+│  MCP Module App Store → brand/model adapters      │
 │  Regime Engine     →  festival/guest/sleep/away   │
 │  Rule Miner        →  T3→T0 promotion pipeline    │
 └──────────────────────────────────────────────────┘
@@ -157,11 +158,14 @@ GET  /api/health                  # service status, mock mode, WS connections
 GET  /api/homes                   # list all active homes
 GET  /api/homes/:id               # full home state
 GET  /api/homes/:id/stats         # tier breakdown, cost, rule counts
+GET  /api/homes/:id/twin          # digital twin snapshot (mode, rooms, devices, tier stats)
+GET  /api/homes/:id/anticipations # time-aware anticipated actions list
 POST /api/homes/:id/seed          # seed with 15-device Indian home (instant demo)
 POST /api/homes/:id/reset         # wipe state
 GET  /api/homes/:id/events        # event history (?limit=20&tier=T0)
 PATCH /api/homes/:id/inventory    # {"item":"milk","quantity":2}
 PATCH /api/homes/:id/sounds/:cluster_id/identify  # {"label":"inverter beep"}
+POST /api/homes/:id/seed-learning-history  # seed 7 days of events for rule mining demo
 ```
 
 ### Devices (Dynamic Registry)
@@ -225,6 +229,98 @@ POST /api/homes/:id/rules/proposed/:id/reject   # discard
 4. Same event now routes to T0 (instant, $0)
 5. Show `GET /api/homes/demo_home_001/stats` → T0% is rising
 
+### MCP Module App Store
+```bash
+GET  /api/app-store/stats                  # total modules, installs, categories
+GET  /api/app-store/categories             # category → count
+GET  /api/app-store/modules                # list modules (?category=&brand=&device_type=&verified=)
+GET  /api/app-store/modules?q=kirloskar    # search modules
+GET  /api/app-store/modules/:module_id     # full module definition
+POST /api/app-store/modules                # publish an unverified module
+GET  /api/app-store/modules/template       # module creation template
+POST /api/app-store/generate-module        # Bedrock/mock module generator
+POST /api/app-store/modules/:module_id/install/:home_id  # install into home
+GET  /api/homes/:home_id/modules           # installed modules for home
+```
+
+**What modules add:**
+- brand/model-specific MCP-like device adapters
+- richer property schemas
+- safety class and dead-man timer metadata
+- extra T0 rule templates
+- room/device-specific Bedrock knowledge fragments
+- T1 intent pattern metadata, including Hinglish
+- demo event samples
+
+**Browse/search modules:**
+```bash
+curl "$BASE/app-store/modules?device_type=water_pump&verified=true"
+curl "$BASE/app-store/modules?q=daikin"
+curl "$BASE/app-store/categories"
+curl "$BASE/app-store/stats"
+```
+
+**Install a module manually:**
+```bash
+curl -X POST $BASE/app-store/modules/kirloskar-star1-pump-v1/install/$HOME
+curl $BASE/homes/$HOME/modules
+```
+
+**Auto-attach during device registration:**
+When `brand` and `model` are supplied, the backend searches the App Store for a matching module and installs it automatically.
+
+```bash
+curl -X POST $BASE/homes/$HOME/devices \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "'$HOME'_kirloskar_pump",
+    "type": "water_pump",
+    "room_id": "'$HOME'_utility_room",
+    "friendly_name": "Kirloskar Terrace Water Pump",
+    "brand": "Kirloskar",
+    "model": "STAR-1"
+  }'
+```
+
+Response includes:
+```json
+{
+  "auto_t0_rules_generated": 2,
+  "module_attached": {
+    "module_id": "kirloskar-star1-pump-v1",
+    "name": "Kirloskar Star-1 Water Pump",
+    "extra_rules": 4
+  }
+}
+```
+
+**Generate a draft module with AI/mock mode:**
+```bash
+curl -X POST $BASE/app-store/generate-module \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "A smart mosquito repellent plug used at night in Indian bedrooms. It has power, refill level, and child-safe lock.",
+    "device_type": "smart_plug",
+    "brand": "Good Knight",
+    "model": "Gold Flash"
+  }'
+```
+
+With `MOCK_LLM=true`, this returns a template. With `MOCK_LLM=false`, it calls Bedrock to produce a draft adapter.
+
+**Publish a module:**
+Use the structure from `GET /api/app-store/modules/template`, then:
+
+```bash
+curl -X POST $BASE/app-store/modules \
+  -H "Content-Type: application/json" \
+  -d @my-module.json
+```
+
+Published modules are `verified=false` by default. For the hackathon demo, this shows the marketplace flow; production would add DynamoDB, S3/CloudFront, OpenSearch, Redis cache, and a verification pipeline.
+
+**Current demo limitation:** installing a module adds extra T0 rules, but module property schemas, T1 intent patterns, and module knowledge fragments are not fully merged into runtime device/T1/T3 behavior yet.
+
 ### Voice (Amazon Polly TTS + Transcribe STT)
 ```bash
 GET  /api/voice/config            # voice module status, pricing
@@ -233,6 +329,7 @@ POST /api/voice/speak             # {"text":"..","voice":"kajal"} → audio_base
 POST /api/voice/respond           # {"tier":"T3","result":{...}} → spoken response
 GET  /api/voice/demo-phrases      # list pre-built demo phrases
 GET  /api/voice/demo-phrases?phrase=geyser_on  # returns MP3 for that phrase
+POST /api/voice/transcribe        # LIVE AUDIO PATH: audio_base64 → transcript → event cascade
 ```
 
 **Pre-built demo phrases (for offline demo):**
@@ -250,16 +347,117 @@ const audio = new Audio(`data:${content_type};base64,${audio_base64}`);
 audio.play();
 ```
 
-### Hackathon Demo Scenarios
+### Digital Twin + Anticipations
+
 ```bash
-POST /api/simulate/geyser          # T0 scenario, outdoor_temp < 28°C fires rule
-POST /api/simulate/inventory_drop  # T3 + Amazon Now tool
-POST /api/simulate/unknown_sound   # T3 + CLAP zero-shot + cluster
-POST /api/simulate/motor_safety    # T0 dead-man timer (duration > 45)
-POST /api/simulate/voice_command   # voice → full cascade
+GET  /api/homes/:id/twin           # full digital twin snapshot: mode, rooms, devices, tier stats
+GET  /api/homes/:id/anticipations  # anticipated actions list (time-aware)
 ```
 
-All scenario endpoints accept `"voice_response": true` to get Polly audio back.
+**Digital Twin response:**
+```json
+{
+  "home_id": "demo_home_001",
+  "current_mode": "normal",
+  "mode_info": { "label": "Normal", "color": "green", "description": "..." },
+  "available_modes": { "normal": {...}, "festival": {...}, "guest": {...}, "sleep": {...}, "away": {...} },
+  "rooms": [{ "room_id": "...", "devices": [...] }],
+  "architecture_tier": { "T0": {...}, "T1": {...}, "T3": {...} }
+}
+```
+
+**Anticipations response:**
+```json
+{
+  "anticipations": [
+    {
+      "id": "ant_geyser_morning",
+      "title": "Geyser before shower",
+      "room": "bathroom",
+      "reason": "Morning routine detected",
+      "confidence": 0.91,
+      "tier": "T0",
+      "status": "pending",
+      "explanation": "Learned from 28 days of pattern"
+    }
+  ]
+}
+```
+
+### Live Audio Path (Mic Button → Event Pipeline)
+
+```bash
+POST /api/voice/transcribe
+```
+
+**Request:**
+```json
+{
+  "home_id": "demo_home_001",
+  "audio_base64": "<base64-encoded-audio>",
+  "mock_text": "turn on the geyser",
+  "language": "en-IN",
+  "auto_route": true,
+  "voice_response": false,
+  "speaker_id": "owner_1"
+}
+```
+
+- `mock_text` bypasses AWS Transcribe — use for demo (MOCK_LLM mode or testing)
+- `auto_route: true` → transcript is immediately sent into the event pipeline as a `voice_command`
+- `auto_route: false` → returns only `{transcript, stt_is_mock}`
+- `audio_base64` → requires `S3_BUCKET` env var in live mode
+
+**Response (auto_route=true):**
+```json
+{
+  "audio_path": "live",
+  "transcript": "turn on the geyser",
+  "stt_is_mock": true,
+  "language": "en-IN",
+  "event_result": { "tier": "T1", "cost": "$0.00", "result": {...} }
+}
+```
+
+**Frontend mic button flow:**
+```javascript
+// 1. Press button → start recording
+const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+const recorder = new MediaRecorder(stream);
+const chunks = [];
+recorder.ondataavailable = e => chunks.push(e.data);
+recorder.onstop = async () => {
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  const base64 = await blobToBase64(blob);
+  const res = await fetch('/api/voice/transcribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ home_id, audio_base64: base64, auto_route: true, voice_response: true })
+  });
+  const { transcript, event_result } = await res.json();
+  showTranscript(transcript);
+  renderEventResult(event_result);
+};
+recorder.start();
+// 2. Release button → stop
+recorder.stop();
+```
+
+### Hackathon Demo Scenarios
+
+```bash
+POST /api/simulate/geyser              # T0 — outdoor_temp < 28°C fires morning rule
+POST /api/simulate/inventory_drop      # T3 + Amazon Now commerce agent
+POST /api/simulate/unknown_sound       # T3 + CLAP zero-shot + cluster logging
+POST /api/simulate/motor_safety        # T0 — dead-man timer (duration > 45 min)
+POST /api/simulate/voice_command       # voice utterance → full T0→T1→T3 cascade
+POST /api/simulate/study_mode          # T0 — 6 PM tuition: light on, TV suppressed
+POST /api/simulate/night_safety_check  # T0 — TV off, LPG check, motor off, sleep mode
+POST /api/simulate/power_cut           # T0 — inverter battery mode, load shedding
+POST /api/homes/:id/seed-learning-history  # seed 7 days of events for rule mining demo
+```
+
+All scenario endpoints accept `"voice_response": true` to get Polly TTS audio back.
 
 ---
 
@@ -390,7 +588,12 @@ STEP 5 — Sound Discovery: POST /api/simulate/unknown_sound
   → Show: CLAP zero-shot description, cluster logged, user prompt queued
   → Say: "Raw audio never left the device. Only a 512-dim vector came up."
 
-STEP 6 — Rule Miner: POST /api/homes/demo_home_001/rules/mine
+STEP 6 — MCP Module App Store: GET /api/app-store/modules?q=kirloskar
+  → Register a Kirloskar pump with brand/model
+  → Show module_attached and extra safety rules
+  → Say: "New device support comes from a marketplace data adapter, not hub code changes."
+
+STEP 7 — Rule Miner: POST /api/homes/demo_home_001/rules/mine
   → Confirm a proposal → Show T0% rising in stats
   → Say: "The system just got cheaper. Permanently."
 ```
@@ -433,6 +636,16 @@ curl -X POST $BASE/homes/$HOME/devices -H "Content-Type: application/json" \
   -d '{"device_id":"my_ac","type":"ac","room_id":"'$HOME'_master_bedroom","friendly_name":"My AC"}'
 curl -X PATCH $BASE/homes/$HOME/devices/my_ac -H "Content-Type: application/json" \
   -d '{"property":"power","value":true}'
+
+# MCP Module App Store
+curl $BASE/app-store/stats
+curl "$BASE/app-store/modules?q=kirloskar"
+curl -X POST $BASE/app-store/modules/kirloskar-star1-pump-v1/install/$HOME
+curl $BASE/homes/$HOME/modules
+curl -X POST $BASE/homes/$HOME/devices -H "Content-Type: application/json" \
+  -d '{"device_id":"'$HOME'_kirloskar_pump","type":"water_pump","room_id":"'$HOME'_utility_room","friendly_name":"Kirloskar Pump","brand":"Kirloskar","model":"STAR-1"}'
+curl -X POST $BASE/app-store/generate-module -H "Content-Type: application/json" \
+  -d '{"description":"Smart mosquito repellent plug with refill level and child lock","device_type":"smart_plug","brand":"Good Knight","model":"Gold Flash"}'
 
 # Regime
 curl $BASE/homes/$HOME/regime

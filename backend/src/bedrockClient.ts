@@ -11,6 +11,7 @@ import { financialSafety, SupervisorResult } from './financialSafety';
 import { buildSystemPromptContext } from './knowledgePacks';
 import { getRegimeContextNote } from './regimeEngine';
 import { stateStore } from './stateStore';
+import { authorizeTool, AuthorizationContext } from './authorizer';
 
 dotenv.config();
 
@@ -103,7 +104,32 @@ export const SUPERVISOR_TOOLS: Tool[] = [
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
-async function executeTool(tool_name: string, tool_input: any, home_id: string): Promise<any> {
+async function executeTool(
+  tool_name: string,
+  tool_input: any,
+  home_id: string,
+  authContext?: AuthorizationContext,
+): Promise<any> {
+  // Propose-authorize gate (§5.6) — all T3 tool calls pass through before execution
+  const ctx: AuthorizationContext = authContext ?? {
+    home_id,
+    speaker_role: 'owner',
+    identity_confidence: 0.85,
+    current_regime: stateStore.get(home_id)?.current_regime ?? 'normal',
+  };
+  const home = stateStore.get(home_id);
+  const device = tool_name === 'actuate_home_device' ? (home?.devices[tool_input?.device_id] ?? null) : null;
+  const authorization = authorizeTool(tool_name, tool_input, device, ctx);
+
+  if (!authorization.approved) {
+    return {
+      success: false,
+      blocked_by_authorizer: true,
+      reason: authorization.reason,
+      risk_class: authorization.risk_class,
+    };
+  }
+
   if (tool_name === 'actuate_home_device') {
     const property = tool_input.property || 'power';
     const value = tool_input.target_state === 'ON' ? true : tool_input.target_state === 'OFF' ? false : tool_input.target_state;
@@ -163,7 +189,10 @@ export interface SupervisorInput {
 
 export { SupervisorResult };
 
-export async function runSupervisorAgent(input: SupervisorInput): Promise<SupervisorResult> {
+export async function runSupervisorAgent(
+  input: SupervisorInput,
+  authContext?: AuthorizationContext,
+): Promise<SupervisorResult> {
   // 1. Mock mode check
   if (financialSafety.isMockMode()) {
     return financialSafety.getMockResult(input.anomaly_description);
@@ -246,8 +275,8 @@ Take appropriate actions using the available tools.`;
       for (const block of output.content || []) {
         if ('toolUse' in block && block.toolUse) {
           const { toolUseId, name, input: toolInput } = block.toolUse;
-          const result = await executeTool(name!, toolInput as any, input.home_id);
-          tool_calls_executed.push({ tool_name: name!, tool_input: toolInput, tool_output: result });
+          const result = await executeTool(name!, toolInput as any, input.home_id, authContext);
+          tool_calls_executed.push({ tool_name: name!, tool_input: toolInput, tool_output: result, authorization: result.blocked_by_authorizer ? { approved: false, reason: result.reason } : { approved: true } });
           toolResults.push({ toolUseId: toolUseId!, content: [{ json: result }] });
         }
         if ('text' in block && block.text) final_reasoning += block.text;

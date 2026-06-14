@@ -95,3 +95,57 @@ export function identifySoundCluster(req: Request, res: Response) {
   stateStore.identifySoundCluster(home_id, cluster_id, label);
   return res.json({ home_id, cluster_id, label, message: 'Sound cluster identified. New local label minted.' });
 }
+
+/**
+ * GET /api/homes/:home_id/twin
+ * Digital Twin snapshot — the complete real-time representation of the home.
+ * Includes mode, all rooms, all device states, regime, tier stats, and twin health.
+ * Modes: normal | festival | guest | sleep | away
+ */
+export function getDigitalTwin(req: Request, res: Response) {
+  const home_id = req.params['home_id'] as string;
+  const home = stateStore.get(home_id);
+  const stats = stateStore.getStats(home_id);
+
+  const DIGITAL_TWIN_MODES = {
+    normal:   { label: 'Normal',   color: 'green',  description: 'Standard home operation — learning active, all automations running' },
+    festival: { label: 'Festival', color: 'orange', description: 'Festival mode — decorative lighting on, learning paused, guest-friendly settings' },
+    guest:    { label: 'Guest',    color: 'blue',   description: 'Guest present — personal notifications off, privacy mode, chai/coffee suggestions' },
+    sleep:    { label: 'Sleep',    color: 'indigo', description: 'Night mode — noise suppressed, INFO notifications off, safety alerts still active' },
+    away:     { label: 'Away',     color: 'gray',   description: 'Away mode — minimal automations, security watchdog active, no personal data processed' },
+  };
+
+  const rooms = Object.values(home.rooms || {}).map(room => ({
+    ...room,
+    devices: (room.device_ids || []).map(id => home.devices[id]).filter(Boolean).map(d => ({
+      device_id: d.device_id,
+      friendly_name: d.friendly_name,
+      type: d.type,
+      safety_class: d.safety_class,
+      online: d.online,
+      primary_state: d.properties['power']?.current_value ?? d.properties['open']?.current_value ?? null,
+      properties: d.properties,
+    })),
+  }));
+
+  return res.json({
+    home_id,
+    display_name: home.display_name,
+    twin_health: 'LIVE',
+    current_mode: home.current_regime,
+    mode_info: DIGITAL_TWIN_MODES[home.current_regime] || DIGITAL_TWIN_MODES.normal,
+    available_modes: DIGITAL_TWIN_MODES,
+    rooms,
+    inventory: home.inventory,
+    sound_clusters: home.sound_clusters || [],
+    t0_rules_count: home.t0_rules?.length || 0,
+    stats,
+    architecture_tier: {
+      T0: { label: 'Reflex', latency: '<10ms', cost: '$0', share: '~80%' },
+      T1: { label: 'Local NLU', latency: '<100ms', cost: '$0', share: '~12%' },
+      T3: { label: 'Bedrock Cloud', latency: '0.5–3s', cost: '$$', share: '<3%' },
+      CACHED: { label: 'Semantic Cache', latency: '0ms', cost: '$0', share: 'varies' },
+    },
+    snapshot_at: new Date().toISOString(),
+  });
+}

@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
-import { synthesizeSpeech, buildSpokenResponse, voiceModule, INDIA_VOICES, VoiceOption } from '../voiceModule';
+import { synthesizeSpeech, buildSpokenResponse, voiceModule, INDIA_VOICES, VoiceOption, transcribeAudioFromS3, uploadAudioToS3 } from '../voiceModule';
 import { financialSafety } from '../financialSafety';
 import { semanticCache } from '../semanticCache';
 import { stateStore } from '../stateStore';
+import { handleEvent } from './eventsController';
 
 /** POST /api/voice/speak — convert text to speech via Amazon Polly */
 export async function textToSpeech(req: Request, res: Response) {
@@ -103,4 +104,84 @@ export async function demoPhrasesAudio(req: Request, res: Response) {
   }
 
   return res.json({ phrases, usage: 'GET /api/voice/demo-phrases?phrase=geyser_on to get audio, or omit phrase to list all' });
+}
+
+/**
+ * POST /api/voice/transcribe
+ * Live audio path: receives audio (base64 or multipart), returns transcript,
+ * and optionally routes it directly into the event pipeline as a voice_command.
+ *
+ * Mock mode: accepts a `mock_text` field to simulate the transcript without AWS.
+ * Live mode: uploads audio to S3 then runs Amazon Transcribe.
+ *
+ * Frontend flow:
+ *   1. User presses mic button → browser records audio (MediaRecorder API)
+ *   2. On stop: POST audio as base64 to this endpoint with home_id + auto_route=true
+ *   3. Backend transcribes → routes to /api/events as voice_command → returns full result
+ */
+export async function transcribeAudio(req: Request, res: Response) {
+  const {
+    home_id = 'demo_home_001',
+    audio_base64,
+    mock_text,
+    language = 'en-IN',
+    auto_route = true,
+    voice_response = false,
+    speaker_id = 'owner_1',
+  } = req.body;
+
+  const isMock = voiceModule.isMockMode() || !audio_base64 || !!mock_text;
+  let transcript: string;
+  let stt_is_mock = false;
+
+  if (isMock) {
+    // Mock mode: use provided mock_text or a default
+    transcript = mock_text || 'turn on the geyser';
+    stt_is_mock = true;
+  } else {
+    // Live mode: upload audio to S3 then transcribe
+    try {
+      const audioBuffer = Buffer.from(audio_base64, 'base64');
+      const s3_key = await uploadAudioToS3(audioBuffer, `voice_${Date.now()}.mp3`);
+      const transcribeResult = await transcribeAudioFromS3(s3_key, language as any);
+      transcript = transcribeResult.transcript;
+      stt_is_mock = transcribeResult.is_mock;
+    } catch (err: any) {
+      return res.status(500).json({ error: 'STT failed', detail: err.message });
+    }
+  }
+
+  if (!auto_route) {
+    return res.json({ transcript, stt_is_mock, home_id });
+  }
+
+  // Route transcript as a voice_command event through the full T0→T1→T3 cascade
+  const fakeReq = {
+    body: {
+      home_id,
+      event_type: 'voice_command',
+      data: { utterance: transcript, speaker_id, source: 'live_audio' },
+      speaker_id,
+      voice_response,
+    },
+  } as Request;
+
+  // Capture the response from handleEvent by wrapping res
+  const chunks: Buffer[] = [];
+  let statusCode = 200;
+  const fakeRes = {
+    json: (body: any) => {
+      return res.json({
+        audio_path: 'live',
+        transcript,
+        stt_is_mock,
+        language,
+        event_result: body,
+      });
+    },
+    status: (code: number) => { statusCode = code; return fakeRes; },
+    setHeader: () => fakeRes,
+  } as unknown as Response;
+
+  return handleEvent(fakeReq, fakeRes);
 }

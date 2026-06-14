@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { handleEvent } from '../controllers/eventsController';
-import { simulateGeyser, simulateInventoryDrop, simulateUnknownSound, simulateMotorSafety, simulateVoiceCommand } from '../controllers/simulateController';
-import { healthCheck, listHomes, getHomeState, getHomeStats, seedHome, resetHome, getEventHistory, updateInventory, identifySoundCluster } from '../controllers/homeController';
+import { simulateGeyser, simulateInventoryDrop, simulateUnknownSound, simulateMotorSafety, simulateVoiceCommand, simulateStudyMode, simulateNightSafetyCheck, simulatePowerCut, seedLearningHistory, getAnticipations } from '../controllers/simulateController';
+import { healthCheck, listHomes, getHomeState, getHomeStats, seedHome, resetHome, getEventHistory, updateInventory, identifySoundCluster, getDigitalTwin } from '../controllers/homeController';
 import { listDeviceTypes, registerDevice, getDevice, listDevices, updateDeviceProperty, removeDevice, setDeviceOnline } from '../controllers/deviceController';
 import { listRooms, createRoom, getRoom, updateOccupancy } from '../controllers/roomController';
 import { getRegime, forceRegime, refreshRegime } from '../controllers/regimeController';
 import { runMiner, listProposedRules, confirmRule, rejectRule, listT0Rules } from '../controllers/minerController';
-import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhrasesAudio } from '../controllers/voiceController';
+import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhrasesAudio, transcribeAudio } from '../controllers/voiceController';
 import { listModules, getModule, listCategories, getStoreStats, installModule, getInstalledModules, publishModule, generateModuleWithAI, getModuleTemplate } from '../controllers/appStoreController';
 
 const router = Router();
@@ -26,6 +26,8 @@ router.post('/homes/:home_id/reset', resetHome);
 router.get('/homes/:home_id/events', getEventHistory);
 router.patch('/homes/:home_id/inventory', updateInventory);
 router.patch('/homes/:home_id/sounds/:cluster_id/identify', identifySoundCluster);
+router.get('/homes/:home_id/twin', getDigitalTwin);
+router.get('/homes/:home_id/anticipations', getAnticipations);
 
 // ── Devices ───────────────────────────────────────────────────────────────────
 router.get('/device-types', listDeviceTypes);
@@ -60,6 +62,7 @@ router.get('/voice/speak', textToSpeechGet);
 router.post('/voice/speak', textToSpeech);
 router.post('/voice/respond', speakEventResult);
 router.get('/voice/demo-phrases', demoPhrasesAudio);
+router.post('/voice/transcribe', transcribeAudio);
 
 // ── App Store (MCP Module Marketplace) ───────────────────────────────────────
 router.get('/app-store/stats', getStoreStats);
@@ -78,5 +81,9 @@ router.post('/simulate/inventory_drop', simulateInventoryDrop);
 router.post('/simulate/unknown_sound', simulateUnknownSound);
 router.post('/simulate/motor_safety', simulateMotorSafety);
 router.post('/simulate/voice_command', simulateVoiceCommand);
+router.post('/simulate/study_mode', simulateStudyMode);
+router.post('/simulate/night_safety_check', simulateNightSafetyCheck);
+router.post('/simulate/power_cut', simulatePowerCut);
+router.post('/homes/:home_id/seed-learning-history', seedLearningHistory);
 
 export default router;

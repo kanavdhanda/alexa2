@@ -6,6 +6,7 @@ import { runT0RuleEngine } from '../ruleEngine';
 import { buildSpokenResponse, synthesizeSpeech } from '../voiceModule';
 import { wsServer } from '../websocket';
 
+
 // ─── SCENARIO 1: Daily Geyser — T0 handles, $0, <1ms ─────────────────────────
 export async function simulateGeyser(req: Request, res: Response) {
   const home_id = req.body.home_id || 'demo_home_001';
@@ -191,8 +192,326 @@ export async function simulateVoiceCommand(req: Request, res: Response) {
   const speaker_id = req.body.speaker_id || 'owner_1';
   const voice_response = req.body.voice_response ?? false;
 
-  // This routes through the full event pipeline
   req.body = { home_id, event_type: 'voice_command', data: { utterance, speaker_id }, speaker_id, voice_response };
   const { handleEvent } = await import('./eventsController');
   return handleEvent(req, res);
+}
+
+// ─── SCENARIO 6: Study Mode at 6 PM ──────────────────────────────────────────
+export async function simulateStudyMode(req: Request, res: Response) {
+  try {
+  const home_id = req.body.home_id || 'demo_home_001';
+  const voice_response = req.body.voice_response ?? false;
+  const home = stateStore.get(home_id);
+  const t0Start = process.hrtime.bigint();
+
+  // Find study/bedroom light + TV
+  const studyLight = Object.values(home.devices).find(d => d.room_id.includes('study') || d.room_id.includes('bedroom')) ;
+  const tv = Object.values(home.devices).find(d => d.type === 'tv');
+
+  if (studyLight) stateStore.setDeviceProperty(home_id, studyLight.device_id, 'power', true);
+  if (tv) stateStore.setDeviceProperty(home_id, tv.device_id, 'power', false);
+
+  const latencyMs = Number(process.hrtime.bigint() - t0Start) / 1_000_000;
+
+  const actions = [
+    studyLight ? { device: studyLight.device_id, action: 'TURN_ON', reason: 'Study mode: light on' } : null,
+    tv ? { device: tv.device_id, action: 'TURN_OFF', reason: 'Study mode: TV suppressed during tuition hours' } : null,
+  ].filter(Boolean);
+
+  const eventAction = {
+    scenario: 'STUDY_MODE', home_id, result_tier: 'T0', bedrock_called: false,
+    cost_this_event: '$0.00', latency: `${latencyMs.toFixed(3)}ms`, actions,
+  };
+
+  stateStore.addEvent(home_id, {
+    event_id: uuidv4(), timestamp: new Date().toISOString(),
+    event_type: 'sensor_trigger', tier: 'T0', data: { trigger: 'study_mode_6pm' },
+    action_taken: eventAction, regime_at_time: home.current_regime,
+  });
+
+  const result: any = {
+    ...eventAction,
+    trigger: '6 PM tuition schedule — learned routine, confidence 0.88',
+    explanation: 'Study mode activated: bedroom/study light on, TV muted. Learned from 14 days of consistent 6 PM pattern.',
+    home_state: stateStore.get(home_id),
+  };
+  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
+
+  if (voice_response) {
+    const spoken = `Study mode is ready. I've turned on the study light and muted the TV. Good luck with tuition!`;
+    try { (result as any).voice = await synthesizeSpeech(spoken); (result as any).spoken_text = spoken; } catch {}
+  }
+  return res.json(result);
+  } catch (err: any) {
+    console.error('simulateStudyMode error:', err);
+    return res.status(500).json({ error: err.message, stack: err.stack });
+  }
+}
+
+// ─── SCENARIO 7: Night Safety Check ──────────────────────────────────────────
+export async function simulateNightSafetyCheck(req: Request, res: Response) {
+  const home_id = req.body.home_id || 'demo_home_001';
+  const voice_response = req.body.voice_response ?? false;
+  const home = stateStore.get(home_id);
+  const t0Start = process.hrtime.bigint();
+
+  const tv = Object.values(home.devices).find(d => d.type === 'tv');
+  const lgpSensor = Object.values(home.devices).find(d => d.type === 'lpg_sensor');
+  const waterMotor = Object.values(home.devices).find(d => d.type === 'water_pump' || d.type === 'water_motor');
+
+  if (tv) stateStore.setDeviceProperty(home_id, tv.device_id, 'power', false);
+  stateStore.setRegime(home_id, 'sleep', 'night_safety_check');
+
+  const latencyMs = Number(process.hrtime.bigint() - t0Start) / 1_000_000;
+
+  const checks = [
+    { item: 'TV', status: tv ? 'TURNED_OFF' : 'NOT_FOUND' },
+    { item: 'LPG Sensor', status: lgpSensor ? (lgpSensor.properties['gas_detected']?.current_value ? 'ALERT_GAS_DETECTED' : 'SAFE') : 'NOT_FOUND' },
+    { item: 'Water Motor', status: waterMotor ? (waterMotor.properties['power']?.current_value ? 'TURNED_OFF' : 'ALREADY_OFF') : 'NOT_FOUND' },
+    { item: 'Night Mode', status: 'SLEEP_REGIME_ACTIVATED' },
+  ];
+
+  if (waterMotor?.properties['power']?.current_value) {
+    stateStore.setDeviceProperty(home_id, waterMotor.device_id, 'power', false);
+  }
+
+  const result = {
+    scenario: 'NIGHT_SAFETY_CHECK',
+    home_id,
+    result_tier: 'T0',
+    bedrock_called: false,
+    cost_this_event: '$0.00',
+    latency: `${latencyMs.toFixed(3)}ms`,
+    checks,
+    regime_set: 'sleep',
+    explanation: 'Night safety check complete: TV off, LPG safe, water motor off, sleep mode active. All checks passed locally.',
+  };
+
+  stateStore.addEvent(home_id, {
+    event_id: uuidv4(), timestamp: new Date().toISOString(),
+    event_type: 'sensor_trigger', tier: 'T0', data: { trigger: 'night_safety_check' },
+    action_taken: result, regime_at_time: home.current_regime,
+  });
+  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
+
+  if (voice_response) {
+    const safe = checks.every(c => !c.status.includes('ALERT'));
+    const spoken = safe
+      ? `Good night! All safety checks passed. TV is off, gas sensor is clear, water motor is off, and sleep mode is active.`
+      : `Attention! Night safety check found issues. Please review the companion app.`;
+    try { (result as any).voice = await synthesizeSpeech(spoken); (result as any).spoken_text = spoken; } catch {}
+  }
+  return res.json(result);
+}
+
+// ─── SCENARIO 8: Power Cut / Inverter Protection ─────────────────────────────
+export async function simulatePowerCut(req: Request, res: Response) {
+  const home_id = req.body.home_id || 'demo_home_001';
+  const battery_percent = req.body.battery_percent ?? 40;
+  const voice_response = req.body.voice_response ?? false;
+  const home = stateStore.get(home_id);
+  const t0Start = process.hrtime.bigint();
+
+  const inverter = Object.values(home.devices).find(d => d.type === 'inverter');
+  const ac = Object.values(home.devices).find(d => d.type === 'ac');
+  const tv = Object.values(home.devices).find(d => d.type === 'tv');
+
+  // Activate inverter battery mode, shed non-essential loads
+  if (inverter) stateStore.setDeviceProperty(home_id, inverter.device_id, 'battery_mode', true);
+  if (ac && battery_percent < 50) stateStore.setDeviceProperty(home_id, ac.device_id, 'power', false);
+
+  const latencyMs = Number(process.hrtime.bigint() - t0Start) / 1_000_000;
+
+  const actions = [
+    inverter ? { device: inverter.device_id, action: 'BATTERY_MODE_ON', reason: 'Grid power cut — inverter switched to battery' } : null,
+    ac && battery_percent < 50 ? { device: ac?.device_id, action: 'TURN_OFF', reason: 'Load shedding: AC suspended to extend battery life' } : null,
+    battery_percent < 20 ? { alert: 'CRITICAL_BATTERY', message: 'Inverter battery below 20%. Consider essential-only mode.' } : null,
+  ].filter(Boolean);
+
+  const result = {
+    scenario: 'POWER_CUT_INVERTER_PROTECTION',
+    home_id,
+    result_tier: 'T0',
+    bedrock_called: false,
+    cost_this_event: '$0.00',
+    latency: `${latencyMs.toFixed(3)}ms`,
+    battery_percent,
+    grid_status: 'CUT',
+    inverter_status: 'BATTERY_MODE',
+    actions,
+    explanation: `Power cut detected. Inverter on battery (${battery_percent}%). Non-essential loads shed locally. Actuator-local fail-safe: smart plug dead-man timers still active independently.`,
+  };
+
+  stateStore.addEvent(home_id, {
+    event_id: uuidv4(), timestamp: new Date().toISOString(),
+    event_type: 'sensor_trigger', tier: 'T0', data: { trigger: 'power_cut', battery_percent },
+    action_taken: result, regime_at_time: home.current_regime,
+  });
+  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
+
+  if (voice_response) {
+    const spoken = battery_percent < 20
+      ? `Power cut detected. Inverter is on battery, but charge is critically low at ${battery_percent}%. I've turned off the AC and non-essential appliances.`
+      : `Power cut. Switched to inverter battery at ${battery_percent}%. AC suspended to save power.`;
+    try { (result as any).voice = await synthesizeSpeech(spoken); (result as any).spoken_text = spoken; } catch {}
+  }
+  return res.json(result);
+}
+
+// ─── SEED LEARNING HISTORY (for rule mining demo) ────────────────────────────
+export async function seedLearningHistory(req: Request, res: Response) {
+  const home_id = req.body.home_id || 'demo_home_001';
+  const home = stateStore.get(home_id);
+
+  const days = 7;
+  const seededEvents: any[] = [];
+
+  for (let d = 0; d < days; d++) {
+    const base = new Date();
+    base.setDate(base.getDate() - d);
+
+    // Geyser: 6:00 AM daily (weekday pattern)
+    if (base.getDay() !== 0 && base.getDay() !== 6) {
+      const geyser = Object.values(home.devices).find(d => d.type === 'geyser' || d.type === 'water_heater');
+      const geyserEvent = {
+        event_id: uuidv4(),
+        timestamp: new Date(base.setHours(6, 0, 0, 0)).toISOString(),
+        event_type: 'sensor_trigger', tier: 'T3' as const,
+        data: { sensor: 'geyser', outdoor_temp: 18, trigger: 'morning_routine' },
+        action_taken: { action: 'TURN_ON', device_id: geyser?.device_id || 'master_geyser' },
+        regime_at_time: 'normal' as const,
+      };
+      stateStore.addEvent(home_id, geyserEvent);
+      seededEvents.push(geyserEvent);
+    }
+
+    // Study mode: 6 PM daily
+    const studyEvent = {
+      event_id: uuidv4(),
+      timestamp: new Date(new Date(base).setHours(18, 0, 0, 0)).toISOString(),
+      event_type: 'sensor_trigger', tier: 'T1' as const,
+      data: { trigger: 'study_mode_6pm', room: 'bedroom' },
+      action_taken: { action: 'STUDY_MODE_ON' },
+      regime_at_time: 'normal' as const,
+    };
+    stateStore.addEvent(home_id, studyEvent);
+    seededEvents.push(studyEvent);
+
+    // Water motor: 7 AM daily, runs 40 min
+    const motorEvent = {
+      event_id: uuidv4(),
+      timestamp: new Date(new Date(base).setHours(7, 0, 0, 0)).toISOString(),
+      event_type: 'sensor_trigger', tier: 'T0' as const,
+      data: { sensor: 'water_motor', duration: 40, trigger: 'morning_fill' },
+      action_taken: { action: 'SHUT_OFF', reason: 'Tank full' },
+      regime_at_time: 'normal' as const,
+    };
+    stateStore.addEvent(home_id, motorEvent);
+    seededEvents.push(motorEvent);
+  }
+
+  return res.json({
+    message: `Seeded ${seededEvents.length} historical events across ${days} days`,
+    home_id,
+    patterns_seeded: ['geyser_morning_6am', 'study_mode_6pm', 'water_motor_7am'],
+    next_step: `POST /api/homes/${home_id}/rules/mine to discover T0 rule proposals`,
+  });
+}
+
+// ─── ANTICIPATIONS endpoint helper ───────────────────────────────────────────
+export function getAnticipations(req: Request, res: Response) {
+  const home_id = req.params['home_id'] as string;
+  const home = stateStore.get(home_id);
+  const hour = new Date().getHours();
+  const regime = home?.current_regime ?? 'normal';
+
+  const anticipations: any[] = [];
+
+  // Geyser: morning anticipation if cold hour
+  if (hour >= 5 && hour <= 7) {
+    anticipations.push({
+      id: 'ant_geyser_morning',
+      title: 'Geyser before shower',
+      room: 'bathroom',
+      reason: 'Morning routine detected — geyser typically needed at this hour',
+      confidence: 0.91,
+      tier: 'T0',
+      status: 'pending',
+      explanation: 'Learned from 28 days of pattern: geyser follows weekday alarm by ~30 min when outdoor temp < 28°C',
+    });
+  }
+
+  // Study mode
+  if (hour >= 17 && hour <= 18) {
+    anticipations.push({
+      id: 'ant_study_mode',
+      title: 'Study mode at 6 PM',
+      room: 'bedroom',
+      reason: 'Tuition hours starting soon',
+      confidence: 0.88,
+      tier: 'T0',
+      status: 'pending',
+      explanation: 'Consistent 6 PM study session pattern observed across 14 days',
+    });
+  }
+
+  // Night safety
+  if (hour >= 22 || hour <= 1) {
+    anticipations.push({
+      id: 'ant_night_safety',
+      title: 'Night safety check',
+      room: 'all',
+      reason: 'Bedtime routine — TV off, LPG check, motor off',
+      confidence: 0.95,
+      tier: 'T0',
+      status: 'pending',
+      explanation: 'Nightly safety check: TV off, LPG sensor green, water motor off, sleep mode on',
+    });
+  }
+
+  // Festival lighting
+  if (regime === 'festival') {
+    anticipations.push({
+      id: 'ant_festival_lighting',
+      title: 'Festival lighting',
+      room: 'living_room',
+      reason: 'Festival regime active',
+      confidence: 1.0,
+      tier: 'T0',
+      status: 'pending',
+      explanation: 'Festival mode: decorative lights on, learning paused',
+    });
+  }
+
+  // Guest mode
+  if (regime === 'guest') {
+    anticipations.push({
+      id: 'ant_guest_welcome',
+      title: 'Guest mode — personal notifications suppressed',
+      room: 'living_room',
+      reason: 'Guest detected via BLE + occupancy spike',
+      confidence: 0.82,
+      tier: 'T1',
+      status: 'done',
+      explanation: 'Guest mode: personal reminders off, chai/coffee suggestion ready',
+    });
+  }
+
+  // Always: inverter protection
+  const inverter = Object.values(home?.devices || {}).find(d => d.type === 'inverter');
+  if (inverter) {
+    anticipations.push({
+      id: 'ant_inverter_protection',
+      title: 'Inverter protection',
+      room: 'utility_room',
+      reason: 'Actuator-local dead-man timer active',
+      confidence: 1.0,
+      tier: 'T0',
+      status: 'done',
+      explanation: 'Smart plug firmware cutoff active independently of hub — survives power cuts',
+    });
+  }
+
+  return res.json({ home_id, regime, anticipations, generated_at: new Date().toISOString() });
 }

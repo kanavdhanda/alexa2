@@ -38,8 +38,8 @@ The only continuously-running thing, and it runs on the device. Models run on AW
 - **Output = semantic events *plus* acoustic embedding projections.** Alongside each labeled event, the penultimate-layer embedding is emitted. This enables **open-world / zero-shot sound discovery**: an unknown sound (an old inverter beep, a specific water-purifier chirp) has no label, but its embedding is still meaningful. An on-device novelty/OOD detector flags genuinely-unclassified sounds and forwards only the *embedding* (never raw audio) to the Zone D learner, which clusters them over time. A CLAP-style audio-text model can additionally name some novel sounds zero-shot by projecting against text descriptions. Raw audio/video never leaves the device.
 - **Identity fusion:** ECAPA-TDNN voiceprints fused with BLE RSSI from the user's phone/watch and with presence/usual-device/time priors. BLE is a strong prior for the silent case, noisy rooms, and multi-speaker disambiguation — but a phone in the room is not proof of who is speaking, so fused confidence still passes a gate before any personal/privileged action. BLE device-tracking is PII: on-device and consented.
 
-### 2.2 Device / capability plane (MCP + actuator-local safety)
-Each device advertises capabilities as an MCP server (`sense` / `act` / `state`); a **home hub** aggregates them into one MCP endpoint. Capability interpretation for a novel device is a **pairing-time, cached, one-shot** job (ontology map, or one Bedrock call generating an adapter).
+### 2.2 Device / capability plane (MCP + actuator-local safety + Module App Store)
+Each device advertises capabilities as an MCP server (`sense` / `act` / `state`); a **home hub** aggregates them into one MCP endpoint. Capability interpretation for a novel device is a **pairing-time, cached, one-shot** job (ontology map, or one Bedrock call generating an adapter). The **MCP Module App Store** (§11) is the registry for these adapters — brand/model-specific definitions that auto-attach at device registration time, injecting richer property schemas, pre-tuned T0 rules, Hinglish T1 NLU patterns, and India-context Bedrock knowledge pack fragments without any hub-side code change.
 
 **Actuator-local fail-safe.** Safety-critical loads (water pump, geyser, heavy appliances) carry their own firmware-level dead-man timer on the smart plug / ESP32 — e.g., "on for 45 min with no hub heartbeat → shut off." The hub orchestrates, but the safety cutoff lives in the actuator and survives a hub crash, reboot, or power cut. Safety control fails safe locally; it never depends on the hub or the network being alive.
 
@@ -103,7 +103,8 @@ The whistle is sound-event detection, not speech: audio → log-mel → small cl
 | Actuator-local safety | firmware dead-man timers on smart plugs/ESP32; Greengrass on the hub for orchestration |
 | Compute + orchestration | AWS Lambda; AWS Step Functions; Amazon EventBridge; Amazon SQS; Amazon SNS |
 | Reasoning | Amazon Bedrock (Nova, Claude, Titan); Bedrock Agents; Knowledge Bases; Guardrails (PII, denied topics, injection); prompt caching |
-| State + data | DynamoDB (profiles, routines/rules, module registry, per-home graph, sharded by `home_id`); Timestream (history + embedding clusters); OpenSearch Serverless (vectors); S3; ElastiCache (semantic cache, optional); Neptune (only if graphs outgrow DynamoDB) |
+| State + data | DynamoDB (profiles, routines/rules, **module registry (module_id PK + device_type/brand GSIs)**, per-home graph, sharded by `home_id`); Timestream (history + embedding clusters); OpenSearch Serverless (vectors + **module full-text search**); S3 (module bundles + condition template assets); ElastiCache Redis (semantic cache + **module list cache**); Neptune (only if graphs outgrow DynamoDB) |
+| Module distribution | S3 + CloudFront (module bundles CDN-distributed per region); DynamoDB Streams → Lambda → invalidate ElastiCache on publish/update |
 | Distribution | CloudFront (CDN for packs + model updates) + S3 |
 | Identity + security | Cognito; IAM scoped roles; KMS + Secrets Manager; API Gateway (+ throttling); WAF; GuardDuty; IoT Device Defender; CloudTrail |
 | Central one-time training | SageMaker (SED, speaker encoder, OOD); SageMaker Ground Truth (label India sound corpus) |
@@ -183,3 +184,252 @@ Religion-agnostic **Ritual Calendar** abstraction (pooja, namaz, Gurbani, Jain f
 - **Mock:** synthetic sensor series; Amazon Now cart; presence animation; family personas. Optional flex: show one "unknown sound discovery" prompt and one actuator fail-safe.
 - **Cut:** always-on emotion/de-escalation; family audio-chronicler; always-listening trivia; autopay-by-default.
 - **Narrative that wins:** the system gets cheaper as it learns (T3→T0 promotion), it's one elastic architecture for every home, and it fails safe at the actuator.
+
+---
+
+## 12. Live Audio Input Path
+
+The live audio path connects a browser mic button to the full T0→T1→T3 cascade.
+
+```
+User presses mic button (frontend)
+    │
+    ▼  (browser MediaRecorder API — WAV/WebM/MP3)
+POST /api/voice/transcribe
+    {audio_base64, home_id, auto_route: true}
+    │
+    ├─ Mock mode: uses mock_text field directly (zero AWS cost for demo)
+    │
+    └─ Live mode:
+          uploadAudioToS3(buffer) → s3_key
+          transcribeAudioFromS3(s3_key) → transcript (Amazon Transcribe, en-IN)
+    │
+    ▼
+transcript → handleEvent as voice_command event
+    │
+    ├─ T1 NLU matches? → local action (<100ms, $0)
+    └─ Escalates to T3 Bedrock? → cloud reasoning (~1s, $$)
+    │
+    ▼
+Response: { transcript, stt_is_mock, event_result } → frontend
+    + optional voice_response: true → Amazon Polly TTS → audio/mpeg base64
+```
+
+**Privacy:** audio buffer is held only for the duration of the S3 upload and Transcribe call, then the buffer is dropped. Raw audio is never stored or forwarded beyond the single transcription job. The S3 object can be configured with a short TTL (e.g. 15 min) for auto-deletion.
+
+**Demo flow for live audio demo:**
+1. Frontend mic button activates → `MediaRecorder` records
+2. On stop → base64 encode → `POST /api/voice/transcribe` with `mock_text` (demo) or real audio
+3. Backend returns full event result with tier badge and latency
+4. Frontend plays TTS audio if `voice_response=true`
+
+---
+
+## 13. Digital Twin Modes
+
+The Digital Twin is the real-time synchronized state of the home, queryable at `GET /api/homes/:home_id/twin`. It surfaces the five operating **modes** that determine behavior across all tiers:
+
+| Mode | Label | Learning | Notifications | Key Behavior |
+|---|---|---|---|---|
+| `normal` | Normal | Active | All on | Standard automations, full routine learning |
+| `festival` | Festival | Paused | All on | Decorative lighting on; Diwali/Holi/Eid routines; guest-friendly |
+| `guest` | Guest | Active | Personal off | Privacy mode; chai/coffee suggestion; personal reminders suppressed |
+| `sleep` | Sleep | Active | ALERT/WARN only | Noise suppression; INFO blocked; safety alerts still fire |
+| `away` | Away | Active | All off | Minimal automations; security watchdog; no personal data processed |
+
+Mode is set via `POST /api/homes/:home_id/regime` or auto-detected by the regime engine (calendar + occupancy + BLE + time). The twin endpoint also returns `available_modes` with color codes and descriptions for the frontend mode switcher.
+
+---
+
+## 11. MCP Module App Store — Production Architecture
+
+The App Store is the **device adapter registry**: a marketplace where each listing is a brand/model-specific MCP module that turns a generic device type (e.g., `water_pump`) into a fully-parameterized smart home citizen with richer schemas, pre-tuned T0 rules, India-context knowledge, and Hinglish voice patterns. The hack demo runs it in-memory; production replaces that with managed AWS primitives — zero architectural change in the hub.
+
+### 11.1 What a module contains
+
+```
+AppStoreModule
+├── identity          module_id, name, version, author, brand, model_pattern (regex)
+├── store metadata    category, tags, downloads, rating, verified, published_at
+└── mcp_definition
+    ├── capabilities          [sense | act | state]
+    ├── safety_class          CRITICAL | STANDARD | CONVENIENCE
+    ├── property_schemas      typed property map (actuatable/observable flags, min/max/units)
+    ├── dead_man_timer_min    firmware-side cutoff carried into T0 rule
+    ├── auto_t0_rules[]       rule templates with condition_fn_key + condition_params_template
+    │                         (stored as JSON with "DEVICE_ID" placeholder — safe to serialize)
+    ├── knowledge_pack_frag   injected into Bedrock system prompt when this device is involved
+    ├── t1_intents[]          regex patterns for local NLU engine (Hinglish included)
+    ├── default_property_values
+    └── demo_event_samples[]  ready-made test vectors (expected_tier annotated)
+```
+
+The critical design choice is that **modules are pure data, never executable code.** The `condition_params_fn` in the demo is a server-side closure; in production it is a **serialized JSON template** with a `DEVICE_ID` placeholder string. The hub substitutes the real device_id at registration time. No module can inject arbitrary code into the rule engine — the evaluators (`property_gt`, `property_lt`, `property_eq`, `sound_event`, `room_unoccupied`, `time_of_day`, `always`) are a closed, audited set compiled into the hub firmware. Modules contribute *parameters to known evaluators*, not new evaluators.
+
+### 11.2 Data layer — DynamoDB table design
+
+**Table: `mcp-modules`**
+
+| Attribute | Type | Role |
+|---|---|---|
+| `module_id` (PK) | S | Unique identifier; lookup, install |
+| `device_type` (GSI PK) | S | Browse by type |
+| `brand` (GSI PK) | S | Browse by brand |
+| `category` (GSI PK) | S | Browse by category |
+| `downloads` (GSI SK) | N | Sort by popularity within any filter |
+| `verified` | BOOL | Filter verified-only |
+| `published_at` | S (ISO 8601) | Sort by recency |
+| `mcp_definition_s3_key` | S | Pointer to S3 — large definitions stored separately |
+| `mcp_definition_inline` | M | Inline for small definitions (<400KB item limit) |
+
+GSIs: `device_type-downloads-index`, `brand-downloads-index`, `category-downloads-index`.
+
+Reads are on-demand (PAY_PER_REQUEST). A module list page is ~10 DynamoDB reads → ~$0.0001 per browse. Writes are rare (publish/update), no provisioning needed.
+
+**Table: `home-installed-modules`**
+
+| Attribute | Type | Role |
+|---|---|---|
+| `home_id` (PK) | S | Per-home |
+| `module_id` (SK) | S | Which module |
+| `device_id` | S | Which device triggered the install |
+| `installed_at` | S | Timestamp |
+| `pinned_version` | S | Homes pin to a major version; minor updates auto-apply |
+
+### 11.3 Module distribution — S3 + CloudFront
+
+Large `mcp_definition` objects (knowledge pack fragments can be long; demo event corpora grow over time) are stored in **S3 with CloudFront CDN**. The DynamoDB item holds only the `s3_key`; the hub fetches the full definition once at install time and caches it locally. On a module update, the publisher increments the version; DynamoDB Streams fires a Lambda that invalidates the CloudFront path for that module_id.
+
+```
+Publisher publishes v1.3 →
+  DynamoDB item updated →
+  DynamoDB Stream → Lambda →
+    CloudFront InvalidationBatch for /modules/<module_id>/* →
+    homes that auto-update (minor version) pull fresh definition on next heartbeat
+```
+
+Homes pinned to a major version (`1.x`) auto-receive minor updates; they must explicitly approve a major version upgrade (breaking property schema changes). This is the same contract as a semver library.
+
+### 11.4 Full-text search — OpenSearch Serverless
+
+`GET /api/app-store/modules?q=kirloskar` in the demo is a linear scan of an in-memory Map. In production:
+
+- DynamoDB Streams → Lambda → index into **OpenSearch Serverless** collection `mcp-modules` on every publish/update
+- Search indexes: `name`, `description`, `brand`, `tags[]`, `knowledge_pack_fragment`
+- Query: multi-match across all fields with BM25, filter by `device_type` / `category` / `verified`
+- Relevance tuning: `downloads` boosted as a function score (popular modules surface first)
+
+Cold search latency: ~30ms. OpenSearch Serverless scales to zero between queries — no idle cost.
+
+### 11.5 List result caching — ElastiCache Redis
+
+Browse queries (`list by category`, `list verified`, `top by downloads`) are read-heavy and change only on publish. Cache strategy:
+
+```
+key = "modules:list:{category}:{device_type}:{verified}:{page}"
+TTL = 1 hour
+Invalidation = DynamoDB Streams → Lambda → DEL matching keys on any module write
+```
+
+Cache hit rate in production (10K homes, 100 modules) is expected >95% — browsing is far more common than publishing. Adds ~$15/month for a `cache.t4g.small` Redis node. Skip for demo; add before 10K homes.
+
+### 11.6 Auto-attach pipeline at device registration
+
+```
+POST /homes/:id/devices  {type, brand, model}
+  │
+  ├─ 1. Validate type against device_type catalog (local, <1ms)
+  ├─ 2. findMatch(type, brand, model)
+  │       → DynamoDB Query on device_type-downloads-index, brand filter, model regex
+  │       → (or ElastiCache hit if same query seen recently)
+  ├─ 3. If matched: fetch mcp_definition from S3 (or CloudFront cache)
+  ├─ 4. Merge property_schemas (module overrides base catalog)
+  ├─ 5. Instantiate device with merged schema
+  ├─ 6. Expand auto_t0_rules (substitute DEVICE_ID placeholder → real device_id)
+  ├─ 7. Write rules to home's T0 rule set (DynamoDB or in-memory hub)
+  ├─ 8. Record install in home-installed-modules table
+  └─ 9. Return {device, module_attached, auto_t0_rules_generated}
+```
+
+Total added latency for auto-attach: ~30ms (one DynamoDB query + one S3/CloudFront fetch, both cacheable). The rule engine on the hub sees no difference — rules are rules whether they came from the base catalog or a module.
+
+### 11.7 AI module generator — pairing-time Bedrock call
+
+`POST /api/app-store/generate-module` is the architectural §2.2 "one-shot pairing-time Bedrock call." For a novel device (no existing module):
+
+```
+User describes device in plain English
+    │
+    ▼
+Bedrock Nova Micro — structured generation
+    Prompt injects: device_type list, property schema format,
+    condition_fn_key whitelist, India context instructions
+    │
+    ▼
+JSON module definition
+    │
+    ├─ Validate: all condition_fn_keys are in the closed evaluator set
+    ├─ Validate: property types match allowed enum
+    ├─ Strip any field not in the schema (no code injection surface)
+    │
+    ├─ Save to DynamoDB with verified=false, author="AI Generated"
+    └─ Return to user for review before publishing
+
+Cost: ~800 tokens in, ~1500 out = ~$0.000035 on Nova Micro. One-time per novel device model.
+```
+
+The generator result is **always unverified**. The team reviews, tests with demo_event_samples, then flips `verified=true`. Verified modules surface above unverified in default sort order.
+
+### 11.8 Module verification pipeline
+
+```
+publish() → verified=false, queued for review
+    │
+    ▼
+SQS queue: module-review-queue
+    │
+    ▼
+Lambda: automated-module-verifier
+    ├─ Schema validation (all required fields, no extra keys)
+    ├─ Safety check: condition_fn_keys against whitelist
+    ├─ Property schema sanity (min < max, enum values non-empty)
+    ├─ T0 rule confidence bounds (0.0–1.0)
+    ├─ Knowledge pack fragment: run through Bedrock Guardrails (PII, injection)
+    └─ Result: {pass, warnings[], blockers[]}
+            │
+            ├─ if blockers → module stays unverified, author notified via SNS
+            └─ if pass → human reviewer notified (SNS → Slack/email)
+                        manual approval → verified=true → DynamoDB update → Stream → CDN invalidation
+```
+
+The automated check catches ~80% of issues (schema errors, unsafe condition keys). Human review catches India-context errors (wrong whistle counts, wrong TDS thresholds for a region).
+
+### 11.9 Scalability envelope
+
+| Metric | Demo | Production target | How it scales |
+|---|---|---|---|
+| Module count | 10 | 10,000+ | DynamoDB + OpenSearch scale linearly |
+| Homes | 1 | 10M | Per-home sharding; hub-local rule evaluation |
+| Browse RPS | — | 50,000 | CloudFront + ElastiCache absorbs; DynamoDB never sees >5% |
+| Install RPS | — | 5,000 | DynamoDB on-demand; S3/CF fetch cached per module |
+| Rule engine | in-memory | hub-local | Rules are data in hub RAM; store is never on the hot path |
+| Publish rate | — | ~100/day | Write path is never hot; DynamoDB Streams → async pipeline |
+| AI generation | mock | ~10K/day | Lambda + Bedrock; no server to scale |
+
+**Key principle:** the module store is on the **registration path, not the event path.** Once a device is registered and its rules are loaded into the hub, the store is never touched again until the module updates. Event processing (T0/T1/T3) is entirely hub-local. The store scales independently and has no bearing on event latency.
+
+### 11.10 Cost model (production, 10M homes, 100K modules)
+
+| Component | Cost driver | Est. monthly |
+|---|---|---|
+| DynamoDB reads | ~5M browse queries/day × $0.0001/10 reads | ~$5 |
+| DynamoDB writes | ~3K publishes/day × $0.00125/write | ~$0.01 |
+| S3 storage | 100K modules × ~50KB avg = ~5GB | ~$0.10 |
+| CloudFront | ~10M module fetches/month × $0.0085/10K | ~$8.50 |
+| OpenSearch Serverless | OCU-hours (scales to zero, spiky browse load) | ~$50–200 |
+| ElastiCache t4g.small | always-on | ~$15 |
+| Lambda (verifier + stream processor) | ~3K invocations/day | ~$0 |
+| Bedrock Nova Micro (AI generator) | ~1K generations/day × $0.000035 | ~$1 |
+| **Total store infra** | | **~$80–230/month** |
+
+The event processing cost (T0/T1/T3) is separate and dominated by T3 Bedrock calls — the store adds negligible overhead. At 10M homes, per-home store cost is **$0.000023/month** — effectively free.
