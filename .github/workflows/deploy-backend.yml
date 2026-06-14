@@ -11,6 +11,7 @@ env:
   AWS_REGION: us-east-1
   ECR_REPO: alexa-india-backend
   ACCOUNT_ID: 116137269322
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
