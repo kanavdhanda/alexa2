@@ -1,47 +1,105 @@
-name: Deploy Backend to AWS App Runner
+name: Test → Build → Deploy Backend
 
 on:
   push:
-    branches: [main, master]
-    paths: ['backend/**']
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-backend.yml'
 
 env:
   AWS_REGION: us-east-1
-  ECR_REPOSITORY: alexa-india-backend
+  ECR_REPO: alexa-india-backend
+  ACCOUNT_ID: 116137269322
 
 jobs:
-  deploy:
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+      - name: Run test suite (MOCK_LLM=true — no real AWS calls)
+        working-directory: backend
+        run: MOCK_LLM=true npm test
+        env:
+          AWS_REGION: us-east-1
 
+  build:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image_uri: ${{ steps.build.outputs.image_uri }}
+    steps:
+      - uses: actions/checkout@v4
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push Docker image to ECR
+      - name: Build, tag and push Docker image
+        id: build
+        working-directory: backend
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          cd backend
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-                     $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "Pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t $REGISTRY/$ECR_REPO:$IMAGE_TAG .
+          docker tag $REGISTRY/$ECR_REPO:$IMAGE_TAG $REGISTRY/$ECR_REPO:latest
+          docker push $REGISTRY/$ECR_REPO:$IMAGE_TAG
+          docker push $REGISTRY/$ECR_REPO:latest
+          echo "image_uri=$REGISTRY/$ECR_REPO:latest" >> $GITHUB_OUTPUT
 
-      - name: App Runner auto-deploys from latest ECR image
-        run: echo "App Runner will pick up the new image automatically (AutoDeploymentsEnabled=true)"
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy docker-compose.prod.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: backend/docker-compose.prod.yml
+          target: /home/ec2-user/
+          strip_components: 1
+      - name: SSH — pull new image and restart via docker compose
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            aws ecr get-login-password --region us-east-1 | \
+              docker login --username AWS \
+                           --password-stdin 116137269322.dkr.ecr.us-east-1.amazonaws.com
+            docker pull 116137269322.dkr.ecr.us-east-1.amazonaws.com/alexa-india-backend:latest
+            cd /home/ec2-user
+            docker compose -f docker-compose.prod.yml up -d --force-recreate --remove-orphans
+            echo "Waiting for backend to become healthy..."
+            for i in $(seq 1 12); do
+              if curl -sf http://localhost:3001/api/health > /dev/null; then
+                echo "Backend is healthy"
+                exit 0
+              fi
+              echo "  attempt $i/12 — waiting 5s..."
+              sleep 5
+            done
+            echo "Backend did not become healthy in time"
+            docker compose -f docker-compose.prod.yml logs --tail=50
+            exit 1
