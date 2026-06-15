@@ -39,8 +39,8 @@ app.use((req, _res, next) => {
 
 app.use('/api', routes);
 
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found', docs: '/api/health', websocket: 'ws://localhost:PORT/ws?home_id=<id>' });
+app.use((req, res) => {
+  res.status(404).json({ error: `Route not found: ${req.method} ${req.path}`, docs: '/api/health' });
 });
 
 export default app;
