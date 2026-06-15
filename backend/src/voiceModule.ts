@@ -82,7 +82,7 @@ function mockTtsResult(characterCount: number): TtsResult {
     audio_base64: 'SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8vIFNvdW5kQ2xpcC5jb20AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
     content_type: 'audio/mpeg',
     voice_used: 'MOCK',
-    character_count,
+    character_count: characterCount,
     is_mock: true,
     duration_estimate_ms: Math.ceil((characterCount / 15) * 1000),
   };
