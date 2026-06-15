@@ -50,16 +50,29 @@ function buildMockResult(anomaly_description: string): SupervisorResult {
       tool_input: { message: "[MOCK] I've noticed a recurring unrecognized sound. What is this sound?", type: 'QUESTION', requires_response: true },
       tool_output: { success: true, delivered_via: ['mock_alexa_tts'], timestamp: new Date().toISOString() },
     });
-  } else if (desc.includes('device') || desc.includes('actuate') || desc.includes('voice command') || desc.includes('geyser') || desc.includes('motor')) {
+  } else if (desc.includes('voice command') && /\b(hello|hi |hey |how are you|what can you|thank)\b/.test(desc)) {
+    // Conversational greeting — no device action, just respond
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: 'Hi! How may I help you with your home today?', type: 'INFO', requires_response: true },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+    });
+  } else if (desc.includes('geyser') || desc.includes('motor') || desc.includes('pump')) {
     tool_calls.push({
       tool_name: 'actuate_home_device',
-      tool_input: { device_id: 'master_geyser', target_state: 'ON', duration_minutes: 20, reason: '[MOCK] Voice command: turn on geyser' },
-      tool_output: { success: true, device_id: 'master_geyser', new_state: 'ON', executed_at: new Date().toISOString() },
+      tool_input: { device_id: 'master_geyser', target_state: desc.includes('off') ? 'OFF' : 'ON', duration_minutes: 20, reason: 'Voice command via T3' },
+      tool_output: { success: true, device_id: 'master_geyser', new_state: desc.includes('off') ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+    });
+  } else if (desc.includes('device') || desc.includes('actuate') || desc.includes('voice command')) {
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: 'I can help with lights, fans, TV, geyser, AC, and more. What would you like me to do?', type: 'INFO', requires_response: true },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
     });
   } else {
     tool_calls.push({
       tool_name: 'send_user_notification',
-      tool_input: { message: '[MOCK] Alexa+ analyzed your request. In production, real Bedrock tool calls would execute here.', type: 'INFO', requires_response: false },
+      tool_input: { message: 'Alexa+ analyzed your request. In production, real Bedrock tool calls would execute here.', type: 'INFO', requires_response: false },
       tool_output: { success: true, delivered_via: ['mock'], timestamp: new Date().toISOString() },
     });
   }
