@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { synthesizeSpeech, buildSpokenResponse, voiceModule, INDIA_VOICES, VoiceOption, transcribeAudioFromS3, uploadAudioToS3 } from '../voiceModule';
+import { synthesizeSpeech, buildSpokenResponse, voiceModule, INDIA_VOICES, VoiceOption, transcribeAudioWithGroq } from '../voiceModule';
 import { financialSafety } from '../financialSafety';
 import { semanticCache } from '../semanticCache';
 import { stateStore } from '../stateStore';
@@ -120,6 +120,7 @@ export async function demoPhrasesAudio(req: Request, res: Response) {
  *   3. Backend transcribes → routes to /api/events as voice_command → returns full result
  */
 export async function transcribeAudio(req: Request, res: Response) {
+  const body = req.body ?? {};
   const {
     home_id = 'demo_home_001',
     audio_base64,
@@ -128,7 +129,7 @@ export async function transcribeAudio(req: Request, res: Response) {
     auto_route = true,
     voice_response = false,
     speaker_id = 'owner_1',
-  } = req.body;
+  } = body;
 
   const isMock = voiceModule.isMockMode() || !audio_base64 || !!mock_text;
   let transcript: string;
@@ -139,11 +140,11 @@ export async function transcribeAudio(req: Request, res: Response) {
     transcript = mock_text || 'turn on the geyser';
     stt_is_mock = true;
   } else {
-    // Live mode: upload audio to S3 then transcribe
+    // Live mode: send audio buffer directly to Groq Whisper
     try {
       const audioBuffer = Buffer.from(audio_base64, 'base64');
-      const s3_key = await uploadAudioToS3(audioBuffer, `voice_${Date.now()}.mp3`);
-      const transcribeResult = await transcribeAudioFromS3(s3_key, language as any);
+      const mimeType = body.mime_type || 'audio/webm';
+      const transcribeResult = await transcribeAudioWithGroq(audioBuffer, mimeType);
       transcript = transcribeResult.transcript;
       stt_is_mock = transcribeResult.is_mock;
     } catch (err: any) {
@@ -183,5 +184,9 @@ export async function transcribeAudio(req: Request, res: Response) {
     setHeader: () => fakeRes,
   } as unknown as Response;
 
-  return handleEvent(fakeReq, fakeRes);
+  try {
+    return await handleEvent(fakeReq, fakeRes);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Event routing failed', detail: err.message, transcript });
+  }
 }

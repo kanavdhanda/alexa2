@@ -1,9 +1,8 @@
 /**
- * Voice Module — Sarvam AI (TTS, Hinglish) + Amazon Transcribe (STT)
- * Priority: Sarvam AI → Amazon Polly → Mock (browser TTS fallback)
+ * Voice Module — Amazon Polly (TTS) + Groq Whisper (STT)
  *
- * TTS flow:  text → Sarvam/Polly → WAV/MP3 base64 → frontend plays it
- * STT flow:  browser mic audio → POST /api/voice/transcribe → text → event pipeline
+ * TTS flow:  text → Polly → MP3 base64 → frontend plays it
+ * STT flow:  browser mic audio → POST /api/voice/transcribe → Groq Whisper → text → event pipeline
  */
 
 import {
@@ -13,23 +12,17 @@ import {
   OutputFormat,
   VoiceId,
 } from '@aws-sdk/client-polly';
-import {
-  TranscribeClient,
-  StartTranscriptionJobCommand,
-  GetTranscriptionJobCommand,
-  TranscriptionJobStatus,
-  LanguageCode,
-} from '@aws-sdk/client-transcribe';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import FormData from 'form-data';
+import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const IS_MOCK  = process.env.MOCK_LLM === 'true';
 const REGION   = process.env.AWS_REGION || 'us-east-1';
-const S3_BUCKET = process.env.S3_BUCKET || '';
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 
-// ─── AWS Clients (only used when AWS_ACCESS_KEY_ID is set) ────────────────────
+// ─── AWS Polly Client ─────────────────────────────────────────────────────────
 
 const pollyClient = new PollyClient({
   region: REGION,
@@ -38,19 +31,8 @@ const pollyClient = new PollyClient({
     : {}),
 });
 
-const transcribeClient = new TranscribeClient({
-  region: REGION,
-  ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_ACCESS_KEY_ID !== 'YOUR_KEY_HERE'
-    ? { credentials: { accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '' } }
-    : {}),
-});
-
-const s3Client = new S3Client({
-  region: REGION,
-  ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_ACCESS_KEY_ID !== 'YOUR_KEY_HERE'
-    ? { credentials: { accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '' } }
-    : {}),
-});
+// stub — S3 no longer used, kept so TypeScript doesn't complain on any lingering references
+const s3Client = { send: async () => {} } as any;
 
 // ─── Voice IDs ────────────────────────────────────────────────────────────────
 
@@ -217,7 +199,7 @@ export async function synthesizeSpeech(
   return mockTtsResult(characterCount);
 }
 
-// ─── STT via Transcribe ───────────────────────────────────────────────────────
+// ─── STT via Groq Whisper ─────────────────────────────────────────────────────
 
 export interface TranscribeResult {
   transcript: string;
@@ -227,13 +209,13 @@ export interface TranscribeResult {
   is_mock: boolean;
 }
 
-export async function transcribeAudioFromS3(
-  s3_key: string,
-  language: LanguageCode = 'en-IN',
+export async function transcribeAudioWithGroq(
+  audioBuffer: Buffer,
+  mimeType: string = 'audio/webm',
 ): Promise<TranscribeResult> {
-  if (IS_MOCK || !S3_BUCKET) {
+  if (IS_MOCK || !GROQ_API_KEY) {
     return {
-      transcript: '[MOCK STT] Use browser Web Speech API instead.',
+      transcript: '[MOCK STT] Set GROQ_API_KEY to enable real transcription.',
       confidence: 1.0,
       language_code: 'en-IN',
       job_id: 'mock_job',
@@ -241,49 +223,43 @@ export async function transcribeAudioFromS3(
     };
   }
 
-  const jobName = `alexa-demo-${Date.now()}`;
-  const mediaUri = `s3://${S3_BUCKET}/${s3_key}`;
+  const ext = mimeType.includes('webm') ? 'webm' : mimeType.includes('ogg') ? 'ogg' : 'mp3';
+  const form = new FormData();
+  form.append('file', audioBuffer, { filename: `audio.${ext}`, contentType: mimeType });
+  form.append('model', 'whisper-large-v3-turbo');
+  form.append('language', 'en');
+  form.append('response_format', 'json');
 
-  await transcribeClient.send(new StartTranscriptionJobCommand({
-    TranscriptionJobName: jobName,
-    Media: { MediaFileUri: mediaUri },
-    MediaFormat: 'mp3',
-    LanguageCode: language,
-    Settings: { ShowSpeakerLabels: true, MaxSpeakerLabels: 4 },
-  }));
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+      ...form.getHeaders(),
+    },
+    body: form,
+  });
 
-  for (let i = 0; i < 12; i++) {
-    await new Promise(r => setTimeout(r, 5000));
-    const status = await transcribeClient.send(new GetTranscriptionJobCommand({ TranscriptionJobName: jobName }));
-    const job = status.TranscriptionJob;
-    if (job?.TranscriptionJobStatus === TranscriptionJobStatus.COMPLETED) {
-      const transcriptUri = job.Transcript?.TranscriptFileUri || '';
-      const transcript = await fetchTranscriptText(transcriptUri);
-      return { transcript, confidence: 0.92, language_code: 'en-IN', job_id: jobName, is_mock: false };
-    }
-    if (job?.TranscriptionJobStatus === TranscriptionJobStatus.FAILED) {
-      throw new Error(`Transcription failed: ${job.FailureReason}`);
-    }
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Groq Whisper error ${res.status}: ${err}`);
   }
-  throw new Error('Transcription timed out after 60 seconds');
+
+  const json = await res.json() as { text: string };
+  return {
+    transcript: json.text?.trim() || '',
+    confidence: 0.95,
+    language_code: 'en',
+    job_id: `groq_${Date.now()}`,
+    is_mock: false,
+  };
 }
 
-async function fetchTranscriptText(uri: string): Promise<string> {
-  const res = await fetch(uri);
-  const json = await res.json() as any;
-  return json?.results?.transcripts?.[0]?.transcript || '';
+// kept for backward-compat so voiceController imports don't need changing
+export async function transcribeAudioFromS3(s3_key: string): Promise<TranscribeResult> {
+  throw new Error('AWS Transcribe disabled — use transcribeAudioWithGroq instead');
 }
-
-export async function uploadAudioToS3(audioBuffer: Buffer, filename: string): Promise<string> {
-  if (!S3_BUCKET) throw new Error('S3_BUCKET env var not set');
-  const key = `voice-uploads/${Date.now()}_${filename}`;
-  await s3Client.send(new PutObjectCommand({
-    Bucket: S3_BUCKET,
-    Key: key,
-    Body: audioBuffer,
-    ContentType: 'audio/mpeg',
-  }));
-  return key;
+export async function uploadAudioToS3(_buf: Buffer, _name: string): Promise<string> {
+  throw new Error('S3 upload disabled');
 }
 
 // ─── Alexa response formatter ─────────────────────────────────────────────────

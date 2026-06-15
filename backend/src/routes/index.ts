@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { runBatch } from '../nightlyBatch';
 import { handleEvent } from '../controllers/eventsController';
 import { simulateGeyser, simulateInventoryDrop, simulateUnknownSound, simulateMotorSafety, simulateVoiceCommand, simulateStudyMode, simulateNightSafetyCheck, simulatePowerCut, seedLearningHistory, getAnticipations } from '../controllers/simulateController';
 import { healthCheck, listHomes, getHomeState, getHomeStats, seedHome, resetHome, getEventHistory, updateInventory, identifySoundCluster, getDigitalTwin } from '../controllers/homeController';
@@ -85,5 +86,11 @@ router.post('/simulate/study_mode', simulateStudyMode);
 router.post('/simulate/night_safety_check', simulateNightSafetyCheck);
 router.post('/simulate/power_cut', simulatePowerCut);
 router.post('/homes/:home_id/seed-learning-history', seedLearningHistory);
+
+// ── Nightly batch miner (manual trigger) ─────────────────────────────────────
+router.post('/admin/run-batch', (_req, res) => {
+  const result = runBatch();
+  res.json({ message: 'Batch miner ran', ...result });
+});
 
 export default router;

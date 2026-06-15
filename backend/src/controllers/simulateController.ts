@@ -361,7 +361,7 @@ export async function simulatePowerCut(req: Request, res: Response) {
 
 // ─── SEED LEARNING HISTORY (for rule mining demo) ────────────────────────────
 export async function seedLearningHistory(req: Request, res: Response) {
-  const home_id = req.body.home_id || 'demo_home_001';
+  const home_id = req.params['home_id'] || req.body?.home_id || 'demo_home_001';
   const home = stateStore.get(home_id);
 
   const days = 7;

@@ -4,6 +4,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import routes from './routes/index';
 import { initWebSocket } from './websocket';
+import { initNightlyBatch } from './nightlyBatch';
 import { financialSafety } from './financialSafety';
 
 dotenv.config();
@@ -48,7 +49,8 @@ export default app;
 // Only start the server when run directly (not when imported by tests)
 if (require.main === module) {
   const server = http.createServer(app);
-  initWebSocket(server);
+  const ws = initWebSocket(server);
+  initNightlyBatch(ws);
 
   server.listen(PORT, () => {
     const mockLabel = financialSafety.isMockMode() ? ' [MOCK_LLM=true — no real Bedrock calls]' : ' [LIVE — Bedrock enabled]';

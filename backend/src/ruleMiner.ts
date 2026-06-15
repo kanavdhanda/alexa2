@@ -53,6 +53,52 @@ export function mineRules(home: HomeState): MiningResult {
 
   const proposals: ProposedRule[] = [];
   const now = new Date();
+  let propIndex = 0;
+
+  // --- Step a: Direct action patterns (from seeded/simulated events with action_taken.action) ---
+  // Group events by hour + device action to find time-of-day patterns from any tier
+  const directHourMap = new Map<string, { count: number; device_id: string; property: string; value: any; hours: number[] }>();
+  for (const ev of normalEvents) {
+    if (!ev.action_taken?.action || !ev.action_taken?.device_id) continue;
+    const hour = new Date(ev.timestamp).getHours();
+    const action: string = ev.action_taken.action;
+    const device_id: string = ev.action_taken.device_id;
+    const property = 'power';
+    const value = action === 'TURN_ON' || action === 'TURN_OFF' ? action !== 'TURN_OFF' : true;
+    const key = `${hour}::${device_id}::${property}::${JSON.stringify(value)}`;
+    if (!directHourMap.has(key)) directHourMap.set(key, { count: 0, device_id, property, value, hours: [] });
+    const entry = directHourMap.get(key)!;
+    entry.count += 1;
+    entry.hours.push(hour);
+  }
+  for (const [key, entry] of directHourMap.entries()) {
+    if (entry.count < 2) continue;
+    const hour = parseInt(key.split('::')[0], 10);
+    const condition_params = { hour_of_day: hour, tolerance_minutes: 30 };
+    const action = { device_id: entry.device_id, property: entry.property, value: entry.value };
+    if (ruleAlreadyExists(home, 'time_of_day', condition_params, action)) continue;
+    const confidence = Math.min(0.95, 0.70 + (entry.count - 2) * 0.08);
+    proposals.push({
+      proposal_id: `prop_${Date.now()}_dir${propIndex++}`,
+      description: `At ${hour}:00, set ${action.device_id} to ${JSON.stringify(action.value)} (observed ${entry.count} times from direct actions).`,
+      pattern_support: entry.count,
+      confidence,
+      condition_summary: `Time: ${hour}:00 ± 30 min`,
+      action_summary: `Set ${action.device_id}.${action.property} = ${JSON.stringify(action.value)}`,
+      rule_if_confirmed: {
+        rule_id: uuidv4(),
+        description: `Auto-learned: ${action.device_id} at ${hour}:00`,
+        condition_fn_key: 'time_of_day',
+        condition_params,
+        action,
+        confidence,
+        promoted_from_t3: false,
+        regime_guard: 'normal',
+      },
+      proposed_at: now.toISOString(),
+      status: 'pending',
+    });
+  }
 
   // --- Step b/c: T3 events with actuate_home_device tool calls ---
   const t3Events = normalEvents.filter(
@@ -111,7 +157,6 @@ export function mineRules(home: HomeState): MiningResult {
     }
   }
 
-  let propIndex = 0;
   for (const [key, entry] of hourActuationMap.entries()) {
     if (entry.count < 3) continue;
     const hour = parseInt(key.split('::')[0], 10);
