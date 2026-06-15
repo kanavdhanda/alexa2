@@ -21,6 +21,7 @@ export async function textToSpeech(req: Request, res: Response) {
       duration_estimate_ms: result.duration_estimate_ms,
       audio_base64: result.audio_base64,
       content_type: result.content_type,
+      ...(result.debug && { debug: result.debug }),
       usage_note: 'Play in browser: const a = new Audio("data:audio/mpeg;base64," + audio_base64); a.play()',
     });
   } catch (err: any) {
@@ -134,11 +135,13 @@ export async function transcribeAudio(req: Request, res: Response) {
   const isMock = voiceModule.isMockMode() || !audio_base64 || !!mock_text;
   let transcript: string;
   let stt_is_mock = false;
+  let stt_debug: string | undefined;
 
   if (isMock) {
-    // Mock mode: use provided mock_text or a default
-    transcript = mock_text || 'turn on the geyser';
+    const reason = voiceModule.isMockMode() ? 'MOCK_LLM=true' : !audio_base64 ? 'no audio_base64 provided' : 'mock_text override';
+    transcript = mock_text || '[MOCK STT] ' + reason;
     stt_is_mock = true;
+    stt_debug = reason;
   } else {
     // Live mode: send audio buffer directly to Groq Whisper
     try {
@@ -147,13 +150,14 @@ export async function transcribeAudio(req: Request, res: Response) {
       const transcribeResult = await transcribeAudioWithGroq(audioBuffer, mimeType);
       transcript = transcribeResult.transcript;
       stt_is_mock = transcribeResult.is_mock;
+      stt_debug = transcribeResult.debug;
     } catch (err: any) {
       return res.status(500).json({ error: 'STT failed', detail: err.message });
     }
   }
 
   if (!auto_route) {
-    return res.json({ transcript, stt_is_mock, home_id });
+    return res.json({ transcript, stt_is_mock, ...(stt_debug && { stt_debug }), home_id });
   }
 
   // Route transcript as a voice_command event through the full T0→T1→T3 cascade
@@ -176,6 +180,7 @@ export async function transcribeAudio(req: Request, res: Response) {
         audio_path: 'live',
         transcript,
         stt_is_mock,
+        ...(stt_debug && { stt_debug }),
         language,
         event_result: body,
       });

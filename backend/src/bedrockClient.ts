@@ -107,6 +107,23 @@ export const SUPERVISOR_TOOLS: Tool[] = [
   },
 ];
 
+const REQUEST_WEB_SEARCH_TOOL: Tool = {
+  toolSpec: {
+    name: 'request_web_search',
+    description: 'Signal that this question needs a live web search for accurate/current data. Use for weather, news, live prices, sports scores, or anything that requires up-to-date information. The system will ask the user for permission before searching.',
+    inputSchema: {
+      json: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The exact search query to use' },
+          reason: { type: 'string', description: 'Why live data is needed for this question' },
+        },
+        required: ['query', 'reason'],
+      },
+    },
+  },
+};
+
 // ─── Multi-agent routing ──────────────────────────────────────────────────────
 
 type Specialist = 'COMMERCE' | 'HOME_CONTROL' | 'KNOWLEDGE';
@@ -136,7 +153,7 @@ const ROUTE_TOOL: Tool = {
 const SPECIALIST_TOOLS: Record<Specialist, Tool[]> = {
   COMMERCE:     [SUPERVISOR_TOOLS[0]],                    // order_amazon_now
   HOME_CONTROL: [SUPERVISOR_TOOLS[1]],                    // actuate_home_device
-  KNOWLEDGE:    [SUPERVISOR_TOOLS[2], SUPERVISOR_TOOLS[3]], // log_new_sound_cluster + send_user_notification
+  KNOWLEDGE:    [SUPERVISOR_TOOLS[2], SUPERVISOR_TOOLS[3], REQUEST_WEB_SEARCH_TOOL], // log_new_sound_cluster + send_user_notification + request_web_search
 };
 
 const SPECIALIST_SYSTEM_PROMPTS: Record<Specialist, string> = {
@@ -153,10 +170,11 @@ India context: Geyser duration ≤ 45 min. LPG leak → gas valve OFF immediatel
 Safety: CRITICAL class devices need explicit justification. Minimum necessary actuations only.`,
 
   KNOWLEDGE: `You are the Knowledge & Notification Specialist Agent for Alexa+ India.
-Your role: handle sound discovery, user questions, greetings, and safety alerts.
-Available tools: log_new_sound_cluster, send_user_notification.
+Your role: handle sound discovery, user questions, greetings, and safety alerts. Be brief — 1-2 sentences max.
+Available tools: log_new_sound_cluster, send_user_notification, request_web_search.
 For unknown sounds: log the cluster, then ask the user to identify it.
-For greetings/questions: send_user_notification with a warm, helpful response in Indian English.`,
+For greetings/math/general knowledge: call send_user_notification immediately with a short, warm answer in Indian English. No preamble.
+For questions needing live/current data (weather, news, stock prices, sports scores, "right now"): use request_web_search — the user will be asked for permission before searching.`,
 };
 
 // ─── Tool executor ────────────────────────────────────────────────────────────
@@ -256,6 +274,7 @@ ${homeContext}`;
     modelId: MODEL_ID,
     system: [{ text: triagePrompt }],
     messages: [{ role: 'user', content: [{ text: userMsg }] }],
+    inferenceConfig: { maxTokens: 80, temperature: 0.1 },
     toolConfig: {
       tools: [ROUTE_TOOL],
       toolChoice: { any: {} } as any,
@@ -264,7 +283,7 @@ ${homeContext}`;
 
   const response = await financialSafety.withTimeout(
     bedrockClient.send(new ConverseCommand(params)),
-    8000,
+    25000,
     'SupervisorTriage'
   );
 
@@ -316,12 +335,13 @@ Take appropriate actions using your available tools.`;
       modelId: MODEL_ID,
       system: [{ text: systemPrompt }],
       messages,
+      inferenceConfig: { maxTokens: 300, temperature: 0.2 },
       toolConfig: { tools },
     };
 
     const response = await financialSafety.withTimeout(
       bedrockClient.send(new ConverseCommand(params)),
-      10000,
+      25000,
       `${specialist}Agent iter=${iterations}`
     );
 

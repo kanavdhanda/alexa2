@@ -80,10 +80,16 @@ jobs:
           strip_components: 1
       - name: SSH — pull new image and restart via docker compose
         uses: appleboy/ssh-action@v1
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: GROQ_API_KEY,SARVAM_API_KEY,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
           script: |
             set -e
             aws ecr get-login-password --region us-east-1 | \
@@ -94,7 +100,7 @@ jobs:
             sudo docker stop alexa-backend 2>/dev/null || true
             sudo docker rm -f alexa-backend 2>/dev/null || true
             sudo docker compose -f docker-compose.prod.yml down 2>/dev/null || true
-            sudo docker compose -f docker-compose.prod.yml up --build -d
+            GROQ_API_KEY="$GROQ_API_KEY" SARVAM_API_KEY="$SARVAM_API_KEY" AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" sudo -E docker compose -f docker-compose.prod.yml up --build -d
             sudo docker system prune -f
       - name: Verify /api/health — final gate
         uses: appleboy/ssh-action@v1

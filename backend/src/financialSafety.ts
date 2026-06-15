@@ -58,11 +58,37 @@ function buildMockResult(anomaly_description: string): SupervisorResult {
       tool_input: { message: "[MOCK] I've noticed a recurring unrecognized sound. What is this sound?", type: 'QUESTION', requires_response: true },
       tool_output: { success: true, delivered_via: ['mock_alexa_tts'], timestamp: new Date().toISOString() },
     });
+  } else if (desc.includes('voice command') && /\b(weather|temperature|forecast|news|stock|price|rate|score|result|cricket|match|today|right now|currently|live)\b/i.test(desc)) {
+    // Live-data question — agent should ask for web search permission
+    const utteranceMatch = desc.match(/Voice command: "([^"]+)"/);
+    const query = utteranceMatch ? utteranceMatch[1] : 'that';
+    tool_calls.push({
+      tool_name: 'request_web_search',
+      tool_input: { query, reason: 'Question requires live/current data not available in training knowledge' },
+      tool_output: { status: 'pending_user_permission', query, timestamp: new Date().toISOString() },
+    });
   } else if (desc.includes('voice command') && /\b(hello|hi |hey |how are you|what can you|thank)\b/.test(desc)) {
     // Conversational greeting — no device action, just respond
     tool_calls.push({
       tool_name: 'send_user_notification',
       tool_input: { message: 'Hi! How may I help you with your home today?', type: 'INFO', requires_response: true },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+    });
+  } else if (desc.includes('voice command') && /\b(what is|what's|how much|how many|calculate|tell me|explain|define|who is|when is|where is|\d+\s*[\+\-\*\/x]\s*\d+)\b/i.test(desc)) {
+    // Direct knowledge question / math — extract utterance and give a meaningful mock answer
+    const utteranceMatch = desc.match(/Voice command: "([^"]+)"/);
+    const utterance = utteranceMatch ? utteranceMatch[1] : '';
+    let answer = '[MOCK] In production, Bedrock Nova Micro would answer this question in real time.';
+    const mathMatch = utterance.match(/(\d+(?:\.\d+)?)\s*[\+plus]\s*(\d+(?:\.\d+)?)/i);
+    if (mathMatch) {
+      const sum = parseFloat(mathMatch[1]) + parseFloat(mathMatch[2]);
+      answer = `${mathMatch[1]} plus ${mathMatch[2]} is ${sum}.`;
+    } else if (utterance) {
+      answer = `[MOCK] Great question! "${utterance}" — in production, Alexa+ would use Bedrock to answer this accurately.`;
+    }
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: answer, type: 'INFO', requires_response: false },
       tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
     });
   } else if (desc.includes('geyser') || desc.includes('motor') || desc.includes('pump')) {
@@ -88,7 +114,8 @@ function buildMockResult(anomaly_description: string): SupervisorResult {
   const specialist: AgentRouting['specialist'] =
     (desc.includes('inventory') || desc.includes('order') || desc.includes('milk') || desc.includes('lpg'))
       ? 'COMMERCE'
-      : (desc.includes('sound') || desc.includes('cluster') || desc.includes('embedding'))
+      : (desc.includes('sound') || desc.includes('cluster') || desc.includes('embedding') ||
+         /\b(what is|what's|how much|how many|calculate|tell me|explain|define|who is|when is|where is|weather|temperature|forecast|news|stock|price|rate|score|cricket|match|\d+\s*[\+\-\*\/x]\s*\d+)\b/i.test(desc))
         ? 'KNOWLEDGE'
         : 'HOME_CONTROL';
 
