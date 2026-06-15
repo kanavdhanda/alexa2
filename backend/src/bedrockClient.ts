@@ -107,6 +107,58 @@ export const SUPERVISOR_TOOLS: Tool[] = [
   },
 ];
 
+// ─── Multi-agent routing ──────────────────────────────────────────────────────
+
+type Specialist = 'COMMERCE' | 'HOME_CONTROL' | 'KNOWLEDGE';
+
+const ROUTE_TOOL: Tool = {
+  toolSpec: {
+    name: 'route_to_specialist',
+    description: 'Select the specialist agent best suited to handle this request. Call ONCE.',
+    inputSchema: {
+      json: {
+        type: 'object',
+        properties: {
+          specialist: {
+            type: 'string',
+            enum: ['COMMERCE', 'HOME_CONTROL', 'KNOWLEDGE'],
+            description: 'COMMERCE=ordering/inventory, HOME_CONTROL=device actuation, KNOWLEDGE=sound/questions/alerts',
+          },
+          intent_summary: { type: 'string', description: 'One sentence summary of the request intent' },
+          reason: { type: 'string', description: 'Why this specialist is the best fit' },
+        },
+        required: ['specialist', 'intent_summary', 'reason'],
+      },
+    },
+  },
+};
+
+const SPECIALIST_TOOLS: Record<Specialist, Tool[]> = {
+  COMMERCE:     [SUPERVISOR_TOOLS[0]],                    // order_amazon_now
+  HOME_CONTROL: [SUPERVISOR_TOOLS[1]],                    // actuate_home_device
+  KNOWLEDGE:    [SUPERVISOR_TOOLS[2], SUPERVISOR_TOOLS[3]], // log_new_sound_cluster + send_user_notification
+};
+
+const SPECIALIST_SYSTEM_PROMPTS: Record<Specialist, string> = {
+  COMMERCE: `You are the Commerce Specialist Agent for Alexa+ India.
+Your role: fulfil Amazon Now/Fresh orders and inventory replenishment.
+Available tool: order_amazon_now only.
+Rules: always honour max_budget in INR. EXPRESS delivery = 10 min, STANDARD = 2 hr.
+After ordering, confirm what was ordered and ETA in one friendly sentence.`,
+
+  HOME_CONTROL: `You are the Home-Control Specialist Agent for Alexa+ India.
+Your role: safely actuate smart home devices.
+Available tool: actuate_home_device only.
+India context: Geyser duration ≤ 45 min. LPG leak → gas valve OFF immediately. Respect current home regime.
+Safety: CRITICAL class devices need explicit justification. Minimum necessary actuations only.`,
+
+  KNOWLEDGE: `You are the Knowledge & Notification Specialist Agent for Alexa+ India.
+Your role: handle sound discovery, user questions, greetings, and safety alerts.
+Available tools: log_new_sound_cluster, send_user_notification.
+For unknown sounds: log the cluster, then ask the user to identify it.
+For greetings/questions: send_user_notification with a warm, helpful response in Indian English.`,
+};
+
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
 async function executeTool(
@@ -182,6 +234,131 @@ async function executeTool(
   return { success: false, error: `Unknown tool: ${tool_name}` };
 }
 
+// ─── Triage: supervisor classifies and routes ─────────────────────────────────
+
+async function callSupervisorTriage(
+  input: SupervisorInput,
+  homeContext: string,
+): Promise<{ specialist: Specialist; intent_summary: string; reason: string }> {
+  const triagePrompt = `You are the Supervisor Agent for a multi-agent smart home AI.
+Your ONLY job: classify this request and call route_to_specialist ONCE.
+
+Specialists:
+• COMMERCE — Amazon ordering, grocery, inventory replenishment
+• HOME_CONTROL — device actuation (lights, fans, AC, geyser, locks, TV, motor)
+• KNOWLEDGE — sound discovery, greetings, capability questions, alerts, notifications
+
+${homeContext}`;
+
+  const userMsg = `Request: ${input.anomaly_description}\nEvent: ${JSON.stringify(input.event_data).substring(0, 300)}`;
+
+  const params: ConverseCommandInput = {
+    modelId: MODEL_ID,
+    system: [{ text: triagePrompt }],
+    messages: [{ role: 'user', content: [{ text: userMsg }] }],
+    toolConfig: {
+      tools: [ROUTE_TOOL],
+      toolChoice: { any: {} } as any,
+    },
+  };
+
+  const response = await financialSafety.withTimeout(
+    bedrockClient.send(new ConverseCommand(params)),
+    8000,
+    'SupervisorTriage'
+  );
+
+  for (const block of response.output?.message?.content || []) {
+    if ('toolUse' in block && block.toolUse?.name === 'route_to_specialist') {
+      const inp = block.toolUse.input as any;
+      return {
+        specialist: inp.specialist as Specialist,
+        intent_summary: inp.intent_summary ?? '',
+        reason: inp.reason ?? '',
+      };
+    }
+  }
+
+  // Fallback if model doesn't call the tool
+  return { specialist: 'HOME_CONTROL', intent_summary: input.anomaly_description.substring(0, 60), reason: 'triage fallback' };
+}
+
+// ─── Specialist agent runner ───────────────────────────────────────────────────
+
+async function runSpecialistAgent(
+  specialist: Specialist,
+  input: SupervisorInput,
+  authContext?: AuthorizationContext,
+): Promise<{ tool_calls: any[]; reasoning: string }> {
+  const systemPrompt = SPECIALIST_SYSTEM_PROMPTS[specialist];
+  const tools = SPECIALIST_TOOLS[specialist];
+
+  const userMessage = `T3 ESCALATION — home_id: ${input.home_id}
+
+Anomaly: ${input.anomaly_description}
+
+Event Data:
+${JSON.stringify(input.event_data, null, 2)}
+
+Home State Snapshot:
+${JSON.stringify(input.home_state_snapshot, null, 2)}
+
+Take appropriate actions using your available tools.`;
+
+  const messages: Message[] = [{ role: 'user', content: [{ text: userMessage }] }];
+  const tool_calls_executed: any[] = [];
+  let final_reasoning = '';
+  let iterations = 0;
+
+  while (iterations < 3) {
+    iterations++;
+    const params: ConverseCommandInput = {
+      modelId: MODEL_ID,
+      system: [{ text: systemPrompt }],
+      messages,
+      toolConfig: { tools },
+    };
+
+    const response = await financialSafety.withTimeout(
+      bedrockClient.send(new ConverseCommand(params)),
+      10000,
+      `${specialist}Agent iter=${iterations}`
+    );
+
+    const output = response.output?.message;
+    if (!output) break;
+    messages.push(output);
+
+    if (response.stopReason === 'end_turn') {
+      for (const block of output.content || []) {
+        if ('text' in block && block.text) final_reasoning += block.text;
+      }
+      break;
+    }
+
+    if (response.stopReason === 'tool_use') {
+      const toolResults: ToolResultBlock[] = [];
+      for (const block of output.content || []) {
+        if ('toolUse' in block && block.toolUse) {
+          const { toolUseId, name, input: toolInput } = block.toolUse;
+          const result = await executeTool(name!, toolInput as any, input.home_id, authContext);
+          tool_calls_executed.push({
+            tool_name: name!, tool_input: toolInput, tool_output: result,
+            authorization: result.blocked_by_authorizer ? { approved: false, reason: result.reason } : { approved: true },
+          });
+          toolResults.push({ toolUseId: toolUseId!, content: [{ json: result }] });
+        }
+        if ('text' in block && block.text) final_reasoning += block.text;
+      }
+      messages.push({ role: 'user', content: toolResults.map(r => ({ toolResult: r })) });
+    } else {
+      break;
+    }
+  }
+
+  return { tool_calls: tool_calls_executed, reasoning: final_reasoning || `${specialist} specialist completed.` };
+}
+
 // ─── Supervisor agent ─────────────────────────────────────────────────────────
 
 export interface SupervisorInput {
@@ -206,120 +383,43 @@ export async function runSupervisorAgent(
   // 2. Rate limit check
   const rateCheck = financialSafety.checkRateLimit(input.home_id);
   if (!rateCheck.allowed) {
-    throw new Error(`Rate limit exceeded for ${input.home_id}: ${rateCheck.calls_this_minute}/min (max ${15}). Retry in ${rateCheck.retry_after_seconds}s.`);
+    throw new Error(`Rate limit exceeded for ${input.home_id}: ${rateCheck.calls_this_minute}/min (max 15). Retry in ${rateCheck.retry_after_seconds}s.`);
   }
 
-  // 3. Build context-aware system prompt
+  // 3. Build home context summary for triage
   const home = stateStore.get(input.home_id);
   const regime = home.current_regime;
   const roomType = (input.room_type || 'other') as any;
   const roomContext = buildSystemPromptContext(roomType, regime);
   const regimeNote = getRegimeContextNote(regime);
+  const homeContext = `Regime: ${regime.toUpperCase()} (${regimeNote}) | T0 rules: ${home.t0_rules.length} | Room: ${input.room_type ?? 'unknown'}\n${roomContext}`;
 
-  const systemPrompt = `You are the Supervisor Agent for Alexa+ India Smart Home System — a tiered multi-agent architecture.
+  // 4. STEP 1 — Supervisor triage: fast classification call, forced single tool use
+  const routing = await callSupervisorTriage(input, homeContext);
 
-ARCHITECTURE: Events cascade T0 (reflexes) → T1 (local NLU, <100ms) → T3 (you). You only receive what T0/T1 couldn't handle.
+  const triageTokens = 220;
+  const triageCost = ((triageTokens * 0.000035) / 1000).toFixed(6);
 
-SPECIALIST AGENTS YOU COORDINATE (via tools):
-• Home-control agent  → actuate_home_device  (lights, fans, geyser, AC, locks, TV)
-• Commerce agent      → order_amazon_now     (Amazon Now/Fresh, confirm budget first)
-• Knowledge agent     → send_user_notification (respond to questions, greetings, alerts)
-• Safety/Policy gate  → automatic (authorization runs before every tool call)
+  // 5. STEP 2 — Specialist agent: focused call with only the specialist's tools
+  const { tool_calls, reasoning } = await runSpecialistAgent(routing.specialist, input, authContext);
 
-${roomContext}
-
-CURRENT REGIME: ${regime.toUpperCase()} — ${regimeNote}
-
-INDIA CONTEXT:
-• Geyser: always set duration_minutes ≤ 45 (safety cutoff)
-• Water motor: stop if tank-full sensor triggers or after 30 min
-• LPG leak: actuate gas valve OFF + send ALERT notification immediately
-• Pressure cooker: 3 whistles = food ready (announce)
-• Respond in natural Indian English — concise and friendly
-
-CONVERSATIONAL QUERIES (greetings, questions, "what can you do"):
-• Use send_user_notification with a warm, helpful message
-• For greetings: "Hi! How may I help you with your home today?"
-• For capability questions: briefly list what you can control
-• Never call actuate_home_device for a greeting or question
-
-RULES:
-1. Minimum necessary tool calls — don't over-actuate
-2. CRITICAL safety class devices need explicit strong justification
-3. Commerce: always honour max_budget, confirm via notification before ordering
-4. After tools execute, your final text should be a single conversational sentence
-
-Active T0 rules: ${home.t0_rules.length} | Regime: ${regime} (${regime === 'festival' || regime === 'guest' ? 'LEARNING PAUSED' : 'learning active'})`;
-
-  const userMessage = `T3 ESCALATION — home_id: ${input.home_id}
-
-Anomaly: ${input.anomaly_description}
-
-Event Data:
-${JSON.stringify(input.event_data, null, 2)}
-
-Home State Snapshot:
-${JSON.stringify(input.home_state_snapshot, null, 2)}
-
-Take appropriate actions using the available tools.`;
-
-  const messages: Message[] = [{ role: 'user', content: [{ text: userMessage }] }];
-  const tool_calls_executed: any[] = [];
-  let final_reasoning = '';
-  let iterations = 0;
-
-  while (iterations < 5) {
-    iterations++;
-    const params: ConverseCommandInput = {
-      modelId: MODEL_ID,
-      system: [{ text: systemPrompt }],
-      messages,
-      toolConfig: { tools: SUPERVISOR_TOOLS },
-    };
-
-    const response = await financialSafety.withTimeout(
-      bedrockClient.send(new ConverseCommand(params)),
-      10000,
-      `SupervisorAgent iter=${iterations}`
-    );
-
-    const output = response.output?.message;
-    if (!output) break;
-    messages.push(output);
-
-    if (response.stopReason === 'end_turn') {
-      for (const block of output.content || []) {
-        if ('text' in block && block.text) final_reasoning += block.text;
-      }
-      break;
-    }
-
-    if (response.stopReason === 'tool_use') {
-      const toolResults: ToolResultBlock[] = [];
-      for (const block of output.content || []) {
-        if ('toolUse' in block && block.toolUse) {
-          const { toolUseId, name, input: toolInput } = block.toolUse;
-          const result = await executeTool(name!, toolInput as any, input.home_id, authContext);
-          tool_calls_executed.push({ tool_name: name!, tool_input: toolInput, tool_output: result, authorization: result.blocked_by_authorizer ? { approved: false, reason: result.reason } : { approved: true } });
-          toolResults.push({ toolUseId: toolUseId!, content: [{ json: result }] });
-        }
-        if ('text' in block && block.text) final_reasoning += block.text;
-      }
-      messages.push({ role: 'user', content: toolResults.map(r => ({ toolResult: r })) });
-    } else {
-      break;
-    }
-  }
-
-  const estTokens = 500 + iterations * 250 + tool_calls_executed.length * 120;
-  const estCost = ((estTokens * 0.000035) / 1000).toFixed(6);
+  const specialistTokens = 400 + tool_calls.length * 120;
+  const specialistCost = ((specialistTokens * 0.000035) / 1000).toFixed(6);
+  const totalCost = (parseFloat(triageCost) + parseFloat(specialistCost)).toFixed(6);
+  const totalTokens = triageTokens + specialistTokens;
 
   return {
     model_id: MODEL_ID,
-    reasoning: final_reasoning || 'Agent completed tool execution.',
-    tool_calls: tool_calls_executed,
-    final_plan: `Executed ${tool_calls_executed.length} action(s): ${tool_calls_executed.map(t => t.tool_name).join(', ') || 'none'}`,
-    escalation_cost_estimate: `~$${estCost} USD (est. ${estTokens} tokens, Nova Micro)`,
+    reasoning,
+    tool_calls,
+    final_plan: `${routing.specialist} specialist executed ${tool_calls.length} action(s): ${tool_calls.map(t => t.tool_name).join(', ') || 'none'}`,
+    escalation_cost_estimate: `~$${totalCost} USD (est. ${totalTokens} tokens, 2× Nova Micro — triage + specialist)`,
     is_mock: false,
+    routing: {
+      specialist: routing.specialist,
+      intent_summary: routing.intent_summary,
+      reason: routing.reason,
+      triage_cost_estimate: `~$${triageCost} USD`,
+    },
   };
 }

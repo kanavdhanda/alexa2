@@ -8,6 +8,13 @@ dotenv.config();
  * 3. Timeout        → 10s hard timeout on every Bedrock call
  */
 
+export interface AgentRouting {
+  specialist: 'COMMERCE' | 'HOME_CONTROL' | 'KNOWLEDGE';
+  intent_summary: string;
+  reason: string;
+  triage_cost_estimate: string;
+}
+
 export interface SupervisorResult {
   model_id: string;
   reasoning: string;
@@ -15,6 +22,7 @@ export interface SupervisorResult {
   final_plan: string;
   escalation_cost_estimate: string;
   is_mock?: boolean;
+  routing?: AgentRouting;
 }
 
 // ─── Mock responses (scenario-aware) ─────────────────────────────────────────
@@ -77,13 +85,26 @@ function buildMockResult(anomaly_description: string): SupervisorResult {
     });
   }
 
+  const specialist: AgentRouting['specialist'] =
+    (desc.includes('inventory') || desc.includes('order') || desc.includes('milk') || desc.includes('lpg'))
+      ? 'COMMERCE'
+      : (desc.includes('sound') || desc.includes('cluster') || desc.includes('embedding'))
+        ? 'KNOWLEDGE'
+        : 'HOME_CONTROL';
+
   return {
     model_id: 'MOCK (MOCK_LLM=true — no Bedrock call made)',
-    reasoning: `MOCK MODE ACTIVE. In production with real AWS credentials and MOCK_LLM=false, the Bedrock Nova Micro supervisor agent would: (1) analyze the anomaly, (2) query home state, (3) determine optimal tool calls, (4) execute them with the authorizer gate. Anomaly received: "${anomaly_description.substring(0, 120)}..."`,
+    reasoning: `MOCK MODE ACTIVE. Multi-agent cascade: Supervisor → ${specialist} specialist. In production with real AWS credentials, Bedrock Nova Micro would: (1) triage the request, (2) route to the ${specialist} specialist, (3) execute tools with the authorizer gate. Anomaly: "${anomaly_description.substring(0, 120)}..."`,
     tool_calls,
-    final_plan: `MOCK: Simulated ${tool_calls.length} tool call(s): ${tool_calls.map(t => t.tool_name).join(', ')}`,
-    escalation_cost_estimate: '$0.00 (MOCK MODE — real cost would be ~$0.00004 per call)',
+    final_plan: `MOCK: ${specialist} specialist simulated ${tool_calls.length} tool call(s): ${tool_calls.map(t => t.tool_name).join(', ')}`,
+    escalation_cost_estimate: '$0.00 (MOCK MODE — real cost would be ~$0.00006 per call, 2 Nova Micro calls)',
     is_mock: true,
+    routing: {
+      specialist,
+      intent_summary: `[MOCK] ${anomaly_description.substring(0, 80)}`,
+      reason: '[MOCK] Keyword-matched routing in mock mode',
+      triage_cost_estimate: '$0.00 (mock)',
+    },
   };
 }
 
