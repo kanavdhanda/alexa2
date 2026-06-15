@@ -103,7 +103,7 @@ aws sts get-caller-identity
 ---
 
 ## PART 2 — IAM: Least-Privilege Roles
-
+/exi
 > **Never use root credentials.** Create scoped IAM users and roles.
 
 ### Step 3: Create IAM User for Local Development
