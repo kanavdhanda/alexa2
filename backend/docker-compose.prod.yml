@@ -9,10 +9,10 @@ services:
       - AWS_REGION=us-east-1
       - BEDROCK_MODEL_ID=amazon.nova-micro-v1:0
       - MOCK_LLM=false
-      - POLLY_DEFAULT_VOICE=kajal
       - NODE_ENV=production
       - PORT=3001
       - ALLOWED_ORIGINS=https://alexa2-frontend.vercel.app
+      - SARVAM_API_KEY=${SARVAM_API_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
       interval: 10s
