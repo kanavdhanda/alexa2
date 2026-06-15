@@ -428,88 +428,81 @@ export function getAnticipations(req: Request, res: Response) {
 
   const anticipations: any[] = [];
 
-  // Geyser: morning anticipation if cold hour
-  if (hour >= 5 && hour <= 7) {
-    anticipations.push({
-      id: 'ant_geyser_morning',
-      title: 'Geyser before shower',
-      room: 'bathroom',
-      reason: 'Morning routine detected — geyser typically needed at this hour',
-      confidence: 0.91,
-      tier: 'T0',
-      status: 'pending',
-      explanation: 'Learned from 28 days of pattern: geyser follows weekday alarm by ~30 min when outdoor temp < 28°C',
-    });
-  }
+  // Helper: returns "Today HH:MM" or "Tomorrow HH:MM" based on whether the event is still upcoming today
+  const nextOccurrence = (targetHour: number, targetMin = 0) => {
+    const label = hour < targetHour ? 'Today' : 'Tomorrow';
+    const h = String(targetHour).padStart(2, '0');
+    const m = String(targetMin).padStart(2, '0');
+    return `${label} at ${h}:${m}`;
+  };
 
-  // Study mode
-  if (hour >= 17 && hour <= 18) {
-    anticipations.push({
-      id: 'ant_study_mode',
-      title: 'Study mode at 6 PM',
-      room: 'bedroom',
-      reason: 'Tuition hours starting soon',
-      confidence: 0.88,
-      tier: 'T0',
-      status: 'pending',
-      explanation: 'Consistent 6 PM study session pattern observed across 14 days',
-    });
-  }
+  // ── Always-on predictions (shown regardless of current time) ─────────────────
 
-  // Night safety
-  if (hour >= 22 || hour <= 1) {
-    anticipations.push({
-      id: 'ant_night_safety',
-      title: 'Night safety check',
-      room: 'all',
-      reason: 'Bedtime routine — TV off, LPG check, motor off',
-      confidence: 0.95,
-      tier: 'T0',
-      status: 'pending',
-      explanation: 'Nightly safety check: TV off, LPG sensor green, water motor off, sleep mode on',
-    });
-  }
+  // Geyser: morning routine — show as "next occurrence"
+  anticipations.push({
+    id: 'ant_geyser_morning',
+    action: 'Heat geyser for morning shower',
+    trigger_window: nextOccurrence(6, 30),
+    reason: 'Pattern: geyser follows weekday alarm by ~30 min (28 days observed)',
+    confidence: 0.91,
+    tier: 'T0',
+  });
 
-  // Festival lighting
+  // Study mode: evening routine
+  anticipations.push({
+    id: 'ant_study_mode',
+    action: 'Activate study mode — mute TV, bright lights',
+    trigger_window: nextOccurrence(17, 0),
+    reason: 'Consistent 5 PM tuition pattern across 14 school days',
+    confidence: 0.88,
+    tier: 'T0',
+  });
+
+  // Night safety: bedtime routine
+  anticipations.push({
+    id: 'ant_night_safety',
+    action: 'Night check — LPG off, TV off, motor off',
+    trigger_window: nextOccurrence(22, 30),
+    reason: 'Nightly safety audit before sleep (confidence from 45-day history)',
+    confidence: 0.95,
+    tier: 'T0',
+  });
+
+  // ── Regime-specific additions ─────────────────────────────────────────────────
+
   if (regime === 'festival') {
     anticipations.push({
       id: 'ant_festival_lighting',
-      title: 'Festival lighting',
-      room: 'living_room',
-      reason: 'Festival regime active',
+      action: 'Festival lighting — decorative LEDs on',
+      trigger_window: 'Active now',
+      reason: 'Festival regime detected — learning paused, celebration mode',
       confidence: 1.0,
       tier: 'T0',
-      status: 'pending',
-      explanation: 'Festival mode: decorative lights on, learning paused',
     });
   }
 
-  // Guest mode
   if (regime === 'guest') {
     anticipations.push({
       id: 'ant_guest_welcome',
-      title: 'Guest mode — personal notifications suppressed',
-      room: 'living_room',
-      reason: 'Guest detected via BLE + occupancy spike',
+      action: 'Guest mode — suppress personal alerts',
+      trigger_window: 'Active now',
+      reason: 'Occupancy spike + guest BLE token detected',
       confidence: 0.82,
       tier: 'T1',
-      status: 'done',
-      explanation: 'Guest mode: personal reminders off, chai/coffee suggestion ready',
     });
   }
 
-  // Always: inverter protection
+  // ── Device-specific ───────────────────────────────────────────────────────────
+
   const inverter = Object.values(home?.devices || {}).find(d => d.type === 'inverter');
   if (inverter) {
     anticipations.push({
       id: 'ant_inverter_protection',
-      title: 'Inverter protection',
-      room: 'utility_room',
-      reason: 'Actuator-local dead-man timer active',
+      action: 'Inverter dead-man timer — auto-cutoff armed',
+      trigger_window: 'Continuous',
+      reason: 'Firmware-level protection — survives hub restarts and power cuts',
       confidence: 1.0,
       tier: 'T0',
-      status: 'done',
-      explanation: 'Smart plug firmware cutoff active independently of hub — survives power cuts',
     });
   }
 
