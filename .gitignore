@@ -3,3 +3,4 @@ backend/dist/
 backend/.env
 *.js.map
 extra/
+frontend/
