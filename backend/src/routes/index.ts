@@ -9,6 +9,7 @@ import { getRegime, forceRegime, refreshRegime } from '../controllers/regimeCont
 import { runMiner, listProposedRules, confirmRule, rejectRule, listT0Rules } from '../controllers/minerController';
 import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhrasesAudio, transcribeAudio } from '../controllers/voiceController';
 import { listModules, getModule, listCategories, getStoreStats, installModule, getInstalledModules, publishModule, generateModuleWithAI, getModuleTemplate } from '../controllers/appStoreController';
+import { buildScenarioRule } from '../controllers/scenarioBuilderController';
 
 const router = Router();
 
@@ -86,6 +87,9 @@ router.post('/simulate/study_mode', simulateStudyMode);
 router.post('/simulate/night_safety_check', simulateNightSafetyCheck);
 router.post('/simulate/power_cut', simulatePowerCut);
 router.post('/homes/:home_id/seed-learning-history', seedLearningHistory);
+
+// ── Scenario builder ─────────────────────────────────────────────────────────
+router.post('/scenario-builder/rule', buildScenarioRule);
 
 // ── Nightly batch miner (manual trigger) ─────────────────────────────────────
 router.post('/admin/run-batch', (_req, res) => {
