@@ -10,7 +10,7 @@ import { runMiner, listProposedRules, confirmRule, rejectRule, listT0Rules } fro
 import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhrasesAudio, transcribeAudio } from '../controllers/voiceController';
 import { listModules, getModule, listCategories, getStoreStats, installModule, getInstalledModules, publishModule, generateModuleWithAI, getModuleTemplate } from '../controllers/appStoreController';
 import { logKhata, getKhataLedger, settleKhata } from '../controllers/khataController';
-import { buildScenarioRule } from '../controllers/scenarioBuilderController';
+import { buildScenarioRule, buildScenarioPlan } from '../controllers/scenarioBuilderController';
 import { DEMO_STEPS } from '../demoScript';
 import { getBufferedEvents, getLatestSeq } from '../websocket';
 
@@ -93,6 +93,7 @@ router.post('/homes/:home_id/seed-learning-history', seedLearningHistory);
 
 // ── Scenario builder ─────────────────────────────────────────────────────────
 router.post('/scenario-builder/rule', buildScenarioRule);
+router.post('/scenario-builder/plan', buildScenarioPlan);
 
 // ── Khata Vault ───────────────────────────────────────────────────────────────
 router.post('/homes/:home_id/khata/log', logKhata);
