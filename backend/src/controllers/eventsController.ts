@@ -31,13 +31,14 @@ export async function handleEvent(req: Request, res: Response) {
   const t0Result = runT0RuleEngine(event);
   if (t0Result) {
     const latencyMs = parseFloat(t0Result.latency);
+    const trace = buildTrace('t0', latencyMs);
     stateStore.addEvent(home_id, {
       event_id: eventId, timestamp: receivedAt, event_type, tier: 'T0',
       room_id, speaker_id, data, action_taken: t0Result,
       regime_at_time: regime, latency_ms: latencyMs, cost_usd: 0,
     });
 
-    wsServer?.broadcastEventResult(home_id, 'T0', t0Result, t0Result.latency, '$0.00');
+    wsServer?.broadcastEventResult(home_id, 'T0', t0Result, t0Result.latency, '$0.00', trace);
     wsServer?.broadcastDeviceUpdate(home_id, t0Result.device_id, t0Result.property, t0Result.new_value);
     wsServer?.broadcastStats(home_id, stateStore.getStats(home_id));
 
@@ -46,7 +47,7 @@ export async function handleEvent(req: Request, res: Response) {
       tier: 'T0', cost: '$0.00', result: t0Result,
       home_state: stateStore.get(home_id),
       regime,
-      trace: buildTrace('t0', latencyMs),
+      trace,
     };
 
     if (voice_response) {
@@ -66,13 +67,14 @@ export async function handleEvent(req: Request, res: Response) {
   const t1Result = runT1Engine(event, homeState);
   if (t1Result) {
     const latencyMs = parseFloat(t1Result.latency);
+    const trace = buildTrace('t1', latencyMs);
     stateStore.addEvent(home_id, {
       event_id: eventId, timestamp: receivedAt, event_type, tier: 'T1',
       room_id, speaker_id, data, action_taken: t1Result,
       regime_at_time: regime, latency_ms: latencyMs, cost_usd: 0,
     });
 
-    wsServer?.broadcastEventResult(home_id, 'T1', t1Result, t1Result.latency, '$0.00');
+    wsServer?.broadcastEventResult(home_id, 'T1', t1Result, t1Result.latency, '$0.00', trace);
     if (t1Result.action_taken) {
       wsServer?.broadcastDeviceUpdate(home_id, t1Result.action_taken.device_id, t1Result.action_taken.property, t1Result.action_taken.new_value);
     }
@@ -83,7 +85,7 @@ export async function handleEvent(req: Request, res: Response) {
       tier: 'T1', cost: '$0.00', result: t1Result,
       home_state: stateStore.get(home_id),
       regime,
-      trace: buildTrace('t1', latencyMs),
+      trace,
     };
 
     if (voice_response) {
@@ -116,13 +118,14 @@ export async function handleEvent(req: Request, res: Response) {
       event_id: eventId, timestamp: receivedAt, event_type, tier: 'CACHED',
       room_id, speaker_id, data, action_taken: cached, regime_at_time: regime, cost_usd: 0,
     });
-    wsServer?.broadcastEventResult(home_id, 'CACHED', cached, '0ms', '$0.00 (cache hit)');
+    const cacheTrace = buildTrace('cache', 0);
+    wsServer?.broadcastEventResult(home_id, 'CACHED', cached, '0ms', '$0.00 (cache hit)', cacheTrace);
     wsServer?.broadcastStats(home_id, stateStore.getStats(home_id));
     return res.json({
       event_id: eventId, home_id, received_at: receivedAt, resolved_at: new Date().toISOString(),
       tier: 'CACHED', cost: '$0.00 (semantic cache hit)', result: cached,
       home_state: stateStore.get(home_id), regime,
-      trace: buildTrace('cache', 0),
+      trace: cacheTrace,
     });
   }
 
@@ -166,7 +169,8 @@ export async function handleEvent(req: Request, res: Response) {
       regime_at_time: regime, latency_ms: latencyMs, cost_usd: costUsd,
     });
 
-    wsServer?.broadcastEventResult(home_id, 'T3', t3Result, `${latencyMs}ms`, t3Result.escalation_cost_estimate);
+    const t3Trace = buildTrace('t3', latencyMs, costUsd);
+    wsServer?.broadcastEventResult(home_id, 'T3', t3Result, `${latencyMs}ms`, t3Result.escalation_cost_estimate, t3Trace);
     wsServer?.broadcastStats(home_id, stateStore.getStats(home_id));
 
     const response: any = {
@@ -174,7 +178,7 @@ export async function handleEvent(req: Request, res: Response) {
       tier: 'T3', latency: `${latencyMs}ms`, cost: t3Result.escalation_cost_estimate,
       result: t3Result, home_state: stateStore.get(home_id), regime,
       rate_limit: { calls_this_minute: rateCheck.calls_this_minute, max: 15 },
-      trace: buildTrace('t3', latencyMs, costUsd),
+      trace: t3Trace,
     };
 
     if (voice_response) {

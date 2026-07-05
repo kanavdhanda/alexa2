@@ -38,7 +38,8 @@ export async function simulateGeyser(req: Request, res: Response) {
       data: { sensor: 'geyser', sub_type: 'morning_timer', outdoor_temp }, action_taken: t0Result,
       regime_at_time: home.current_regime,
     });
-    wsServer?.broadcastEventResult(home_id, 'T0', t0Result, t0Result.latency, '$0.00');
+    const trace = buildTrace('t0', latencyMs);
+    wsServer?.broadcastEventResult(home_id, 'T0', t0Result, t0Result.latency, '$0.00', trace);
 
     const response: any = {
       scenario: 'DAILY_GEYSER', home_id, result_tier: 'T0', bedrock_called: false,
@@ -48,7 +49,7 @@ export async function simulateGeyser(req: Request, res: Response) {
       t0_rule_origin: 'Promoted from T3: geyser follows weekday alarm by 30min, outdoor_temp<28°C, support=28 days, confidence=0.91',
       device_state: stateStore.get(home_id).devices[device_id],
       stats: stateStore.getStats(home_id),
-      trace: buildTrace('t0', latencyMs),
+      trace,
     };
 
     if (voice_response) {
@@ -97,13 +98,14 @@ export async function simulateInventoryDrop(req: Request, res: Response) {
       data: { item, quantity, unit, threshold }, action_taken: t3Result,
       regime_at_time: home.current_regime, latency_ms: latencyMs, cost_usd: costUsd,
     });
-    wsServer?.broadcastEventResult(home_id, 'T3', t3Result, latency, t3Result.escalation_cost_estimate);
+    const trace = buildTrace('t3', latencyMs, costUsd);
+    wsServer?.broadcastEventResult(home_id, 'T3', t3Result, latency, t3Result.escalation_cost_estimate, trace);
 
     const response: any = {
       scenario: 'AMAZON_NOW_ESCALATION', home_id, result_tier: 'T3', bedrock_called: !t3Result.is_mock,
       latency, item_dropped: { item, quantity, unit, below_threshold: threshold },
       supervisor_result: t3Result, home_state: stateStore.get(home_id),
-      trace: buildTrace('t3', latencyMs, costUsd),
+      trace,
     };
     if (voice_response) {
       const spoken = buildSpokenResponse('T3', t3Result, home_id);
@@ -141,7 +143,8 @@ export async function simulateUnknownSound(req: Request, res: Response) {
       data: { embedding_id, frequency, clap_guess }, action_taken: t3Result,
       regime_at_time: home.current_regime, latency_ms: latencyMs, cost_usd: costUsd,
     });
-    wsServer?.broadcastEventResult(home_id, 'T3', t3Result, latency, t3Result.escalation_cost_estimate);
+    const trace = buildTrace('t3', latencyMs, costUsd);
+    wsServer?.broadcastEventResult(home_id, 'T3', t3Result, latency, t3Result.escalation_cost_estimate, trace);
 
     const response: any = {
       scenario: 'ZERO_SHOT_SOUND_DISCOVERY', home_id, result_tier: 'T3', bedrock_called: !t3Result.is_mock,
@@ -157,7 +160,7 @@ export async function simulateUnknownSound(req: Request, res: Response) {
       ],
       sound_clusters: stateStore.get(home_id).sound_clusters,
       supervisor_result: t3Result,
-      trace: buildTrace('t3', latencyMs, costUsd),
+      trace,
     };
     if (voice_response) {
       const spoken = buildSpokenResponse('T3', t3Result, home_id);
@@ -188,8 +191,10 @@ export async function simulateMotorSafety(req: Request, res: Response) {
     duration_minutes: duration,
     action: t0Result || `No T0 rule triggered (duration ${duration} <= 45 min)`,
     home_state: stateStore.get(home_id),
-    trace: buildTrace('t0', latencyMs),
   };
+  if (t0Result) {
+    response.trace = buildTrace('t0', latencyMs);
+  }
   if (voice_response && t0Result) {
     const spoken = buildSpokenResponse('T0', t0Result, home_id);
     try { response.voice = await synthesizeSpeech(spoken); response.spoken_text = spoken; } catch {}
@@ -249,7 +254,7 @@ export async function simulateStudyMode(req: Request, res: Response) {
     home_state: stateStore.get(home_id),
     trace: buildTrace('t0', latencyMs),
   };
-  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
+  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00', result.trace);
 
   if (voice_response) {
     const spoken = `Study mode is ready. I've turned on the study light and muted the TV. Good luck with tuition!`;
@@ -307,7 +312,7 @@ export async function simulateNightSafetyCheck(req: Request, res: Response) {
     event_type: 'sensor_trigger', tier: 'T0', data: { trigger: 'night_safety_check' },
     action_taken: result, regime_at_time: home.current_regime,
   });
-  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
+  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00', result.trace);
 
   if (voice_response) {
     const safe = checks.every(c => !c.status.includes('ALERT'));
@@ -363,7 +368,7 @@ export async function simulatePowerCut(req: Request, res: Response) {
     event_type: 'sensor_trigger', tier: 'T0', data: { trigger: 'power_cut', battery_percent },
     action_taken: result, regime_at_time: home.current_regime,
   });
-  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
+  wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00', result.trace);
 
   if (voice_response) {
     const spoken = battery_percent < 20

@@ -240,8 +240,8 @@ class HomeWsServer {
     });
   }
 
-  broadcastEventResult(home_id: string, tier: string, result: any, latency: string, cost: string): void {
-    this.broadcast(home_id, { type: 'event_result', home_id, payload: { tier, result, latency, cost }, timestamp: new Date().toISOString() });
+  broadcastEventResult(home_id: string, tier: string, result: any, latency: string, cost: string, trace?: any): void {
+    this.broadcast(home_id, { type: 'event_result', home_id, payload: { tier, result, latency, cost, ...(trace !== undefined ? { trace } : {}) }, timestamp: new Date().toISOString() });
   }
 
   broadcastDeviceUpdate(home_id: string, device_id: string, property: string, new_value: any): void {

@@ -7,8 +7,8 @@ export interface Trace {
 
 const tierLabels: Record<'t0' | 't1' | 'cache' | 't3', string> = {
   t0: 'Instant reflex',
-  t1: 'Learns locally',
-  cache: 'Recalls past wisdom',
+  t1: 'Thinks locally',
+  cache: 'Remembered answer',
   t3: 'Asks the cloud',
 };
 

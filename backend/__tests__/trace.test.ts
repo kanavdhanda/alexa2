@@ -20,7 +20,7 @@ describe('buildTrace', () => {
   it('t1 trace reflects local NLU', () => {
     const t = buildTrace('t1', 87);
     expect(t.path).toEqual(['device', 't0', 't1']);
-    expect(t.tier_label).toBe('Learns locally');
+    expect(t.tier_label).toBe('Thinks locally');
     expect(t.cost_usd).toBe(0);
     expect(t.latency_ms).toBe(87);
   });
@@ -28,7 +28,7 @@ describe('buildTrace', () => {
   it('cache trace includes cache lookups', () => {
     const t = buildTrace('cache', 235, 0.0000125);
     expect(t.path).toEqual(['device', 't0', 't1', 'cache']);
-    expect(t.tier_label).toBe('Recalls past wisdom');
+    expect(t.tier_label).toBe('Remembered answer');
     expect(t.cost_usd).toBeCloseTo(0.0000125, 8);
     expect(t.latency_ms).toBe(235);
   });
@@ -36,5 +36,12 @@ describe('buildTrace', () => {
   it('defaults costUsd to 0 when omitted', () => {
     const t = buildTrace('t1', 50);
     expect(t.cost_usd).toBe(0);
+  });
+
+  it('uses the exact required tier labels', () => {
+    expect(buildTrace('t0', 1).tier_label).toBe('Instant reflex');
+    expect(buildTrace('t1', 1).tier_label).toBe('Thinks locally');
+    expect(buildTrace('cache', 1).tier_label).toBe('Remembered answer');
+    expect(buildTrace('t3', 1).tier_label).toBe('Asks the cloud');
   });
 });
