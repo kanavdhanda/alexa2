@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { runT0RuleEngine } from '../ruleEngine';
 import { buildSpokenResponse, synthesizeSpeech } from '../voiceModule';
 import { wsServer } from '../websocket';
+import { buildTrace } from '../trace';
 
 
 // ─── SCENARIO 1: Daily Geyser — T0 handles, $0, <1ms ─────────────────────────
@@ -47,6 +48,7 @@ export async function simulateGeyser(req: Request, res: Response) {
       t0_rule_origin: 'Promoted from T3: geyser follows weekday alarm by 30min, outdoor_temp<28°C, support=28 days, confidence=0.91',
       device_state: stateStore.get(home_id).devices[device_id],
       stats: stateStore.getStats(home_id),
+      trace: buildTrace('t0', latencyMs),
     };
 
     if (voice_response) {
@@ -60,6 +62,7 @@ export async function simulateGeyser(req: Request, res: Response) {
     scenario: 'DAILY_GEYSER', home_id, result_tier: 'T0_SUPPRESSED',
     reason: `outdoor_temp (${outdoor_temp}°C) >= 28°C — geyser not needed in warm weather. Rule correctly suppressed.`,
     bedrock_called: false, cost_this_event: '$0.00',
+    trace: buildTrace('t0', latencyMs),
   });
 }
 
@@ -86,11 +89,13 @@ export async function simulateInventoryDrop(req: Request, res: Response) {
       event_data: { item, quantity, unit, threshold, trigger: 'inventory_sensor' },
     });
 
-    const latency = `${Date.now() - t3Start}ms`;
+    const latencyMs = Date.now() - t3Start;
+    const latency = `${latencyMs}ms`;
+    const costUsd = parseFloat(t3Result.escalation_cost_estimate.replace(/[^0-9.]/g, '')) || 0.00004;
     stateStore.addEvent(home_id, {
       event_id: uuidv4(), timestamp: new Date().toISOString(), event_type: 'inventory_drop', tier: 'T3',
       data: { item, quantity, unit, threshold }, action_taken: t3Result,
-      regime_at_time: home.current_regime, latency_ms: Date.now() - t3Start,
+      regime_at_time: home.current_regime, latency_ms: latencyMs, cost_usd: costUsd,
     });
     wsServer?.broadcastEventResult(home_id, 'T3', t3Result, latency, t3Result.escalation_cost_estimate);
 
@@ -98,6 +103,7 @@ export async function simulateInventoryDrop(req: Request, res: Response) {
       scenario: 'AMAZON_NOW_ESCALATION', home_id, result_tier: 'T3', bedrock_called: !t3Result.is_mock,
       latency, item_dropped: { item, quantity, unit, below_threshold: threshold },
       supervisor_result: t3Result, home_state: stateStore.get(home_id),
+      trace: buildTrace('t3', latencyMs, costUsd),
     };
     if (voice_response) {
       const spoken = buildSpokenResponse('T3', t3Result, home_id);
@@ -127,11 +133,13 @@ export async function simulateUnknownSound(req: Request, res: Response) {
       event_data: { embedding_id, frequency, clap_description: clap_guess, ood_confidence: 0.87, occurrence_count: 14, raw_audio_retained: false },
     });
 
-    const latency = `${Date.now() - t3Start}ms`;
+    const latencyMs = Date.now() - t3Start;
+    const latency = `${latencyMs}ms`;
+    const costUsd = parseFloat(t3Result.escalation_cost_estimate.replace(/[^0-9.]/g, '')) || 0.00004;
     stateStore.addEvent(home_id, {
       event_id: uuidv4(), timestamp: new Date().toISOString(), event_type: 'unknown_sound', tier: 'T3',
       data: { embedding_id, frequency, clap_guess }, action_taken: t3Result,
-      regime_at_time: home.current_regime,
+      regime_at_time: home.current_regime, latency_ms: latencyMs, cost_usd: costUsd,
     });
     wsServer?.broadcastEventResult(home_id, 'T3', t3Result, latency, t3Result.escalation_cost_estimate);
 
@@ -149,6 +157,7 @@ export async function simulateUnknownSound(req: Request, res: Response) {
       ],
       sound_clusters: stateStore.get(home_id).sound_clusters,
       supervisor_result: t3Result,
+      trace: buildTrace('t3', latencyMs, costUsd),
     };
     if (voice_response) {
       const spoken = buildSpokenResponse('T3', t3Result, home_id);
@@ -167,8 +176,10 @@ export async function simulateMotorSafety(req: Request, res: Response) {
   const voice_response = req.body.voice_response ?? false;
   const home = stateStore.get(home_id);
 
+  const t0Start = process.hrtime.bigint();
   const event = { home_id, event_type: 'sensor_trigger', data: { sensor: 'water_motor', duration }, room_id: 'utility_room' };
   const t0Result = runT0RuleEngine(event as any);
+  const latencyMs = Number(process.hrtime.bigint() - t0Start) / 1_000_000;
 
   const response: any = {
     scenario: 'WATER_MOTOR_SAFETY', home_id,
@@ -177,6 +188,7 @@ export async function simulateMotorSafety(req: Request, res: Response) {
     duration_minutes: duration,
     action: t0Result || `No T0 rule triggered (duration ${duration} <= 45 min)`,
     home_state: stateStore.get(home_id),
+    trace: buildTrace('t0', latencyMs),
   };
   if (voice_response && t0Result) {
     const spoken = buildSpokenResponse('T0', t0Result, home_id);
@@ -235,6 +247,7 @@ export async function simulateStudyMode(req: Request, res: Response) {
     trigger: '6 PM tuition schedule — learned routine, confidence 0.88',
     explanation: 'Study mode activated: bedroom/study light on, TV muted. Learned from 14 days of consistent 6 PM pattern.',
     home_state: stateStore.get(home_id),
+    trace: buildTrace('t0', latencyMs),
   };
   wsServer?.broadcastEventResult(home_id, 'T0', result, result.latency, '$0.00');
 
@@ -276,7 +289,7 @@ export async function simulateNightSafetyCheck(req: Request, res: Response) {
     stateStore.setDeviceProperty(home_id, waterMotor.device_id, 'power', false);
   }
 
-  const result = {
+  const result: any = {
     scenario: 'NIGHT_SAFETY_CHECK',
     home_id,
     result_tier: 'T0',
@@ -286,6 +299,7 @@ export async function simulateNightSafetyCheck(req: Request, res: Response) {
     checks,
     regime_set: 'sleep',
     explanation: 'Night safety check complete: TV off, LPG safe, water motor off, sleep mode active. All checks passed locally.',
+    trace: buildTrace('t0', latencyMs),
   };
 
   stateStore.addEvent(home_id, {
@@ -329,7 +343,7 @@ export async function simulatePowerCut(req: Request, res: Response) {
     battery_percent < 20 ? { alert: 'CRITICAL_BATTERY', message: 'Inverter battery below 20%. Consider essential-only mode.' } : null,
   ].filter(Boolean);
 
-  const result = {
+  const result: any = {
     scenario: 'POWER_CUT_INVERTER_PROTECTION',
     home_id,
     result_tier: 'T0',
@@ -341,6 +355,7 @@ export async function simulatePowerCut(req: Request, res: Response) {
     inverter_status: 'BATTERY_MODE',
     actions,
     explanation: `Power cut detected. Inverter on battery (${battery_percent}%). Non-essential loads shed locally. Actuator-local fail-safe: smart plug dead-man timers still active independently.`,
+    trace: buildTrace('t0', latencyMs),
   };
 
   stateStore.addEvent(home_id, {

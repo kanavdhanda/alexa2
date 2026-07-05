@@ -9,6 +9,7 @@ import { updateHomeRegime } from '../regimeEngine';
 import { wsServer } from '../websocket';
 import { buildSpokenResponse, synthesizeSpeech } from '../voiceModule';
 import { financialSafety } from '../financialSafety';
+import { buildTrace } from '../trace';
 
 export async function handleEvent(req: Request, res: Response) {
   const { home_id, event_type, data, room_id, speaker_id, voice_response = false } = req.body;
@@ -45,6 +46,7 @@ export async function handleEvent(req: Request, res: Response) {
       tier: 'T0', cost: '$0.00', result: t0Result,
       home_state: stateStore.get(home_id),
       regime,
+      trace: buildTrace('t0', latencyMs),
     };
 
     if (voice_response) {
@@ -81,6 +83,7 @@ export async function handleEvent(req: Request, res: Response) {
       tier: 'T1', cost: '$0.00', result: t1Result,
       home_state: stateStore.get(home_id),
       regime,
+      trace: buildTrace('t1', latencyMs),
     };
 
     if (voice_response) {
@@ -119,6 +122,7 @@ export async function handleEvent(req: Request, res: Response) {
       event_id: eventId, home_id, received_at: receivedAt, resolved_at: new Date().toISOString(),
       tier: 'CACHED', cost: '$0.00 (semantic cache hit)', result: cached,
       home_state: stateStore.get(home_id), regime,
+      trace: buildTrace('cache', 0),
     });
   }
 
@@ -170,6 +174,7 @@ export async function handleEvent(req: Request, res: Response) {
       tier: 'T3', latency: `${latencyMs}ms`, cost: t3Result.escalation_cost_estimate,
       result: t3Result, home_state: stateStore.get(home_id), regime,
       rate_limit: { calls_this_minute: rateCheck.calls_this_minute, max: 15 },
+      trace: buildTrace('t3', latencyMs, costUsd),
     };
 
     if (voice_response) {
