@@ -30,12 +30,31 @@ export interface WsMessage {
   timestamp: string;
 }
 
-class HomeWsServer {
-  private wss: WebSocketServer;
-  private subscriptions = new Map<string, Set<WebSocket>>();
-  private pingInterval: NodeJS.Timeout;
+const buffers = new Map<string, { seq: number; msg: unknown }[]>();
+let seqCounter = 0;
+const BUFFER_CAP = 100;
 
-  constructor(httpServer: Server) {
+export function getBufferedEvents(homeId: string, since: number): { seq: number; msg: unknown }[] {
+  const buf = buffers.get(homeId) || [];
+  return buf.filter(e => e.seq > since);
+}
+
+export function getLatestSeq(): number {
+  return seqCounter;
+}
+
+class HomeWsServer {
+  private wss: WebSocketServer | null = null;
+  private subscriptions = new Map<string, Set<WebSocket>>();
+  private pingInterval: NodeJS.Timeout | null = null;
+
+  constructor(httpServer?: Server) {
+    if (httpServer) this.attachServer(httpServer);
+  }
+
+  /** Attaches a live WebSocketServer transport. Safe to skip entirely (headless mode) —
+   * broadcasting/buffering must still work with zero clients / no server (e.g. in tests). */
+  attachServer(httpServer: Server): void {
     this.wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
     this.wss.on('connection', (ws: WebSocket, req) => {
@@ -231,6 +250,11 @@ class HomeWsServer {
   }
 
   broadcast(home_id: string, message: WsMessage): void {
+    let buf = buffers.get(home_id);
+    if (!buf) { buf = []; buffers.set(home_id, buf); }
+    buf.push({ seq: ++seqCounter, msg: message });
+    if (buf.length > BUFFER_CAP) buf.splice(0, buf.length - BUFFER_CAP);
+
     const clients = this.subscriptions.get(home_id);
     if (!clients || clients.size === 0) return;
     const payload = JSON.stringify(message);
@@ -269,13 +293,16 @@ class HomeWsServer {
     return { total_connections: total, homes_with_connections: this.subscriptions.size };
   }
 
-  shutdown(): void { clearInterval(this.pingInterval); this.wss.close(); }
+  shutdown(): void { if (this.pingInterval) clearInterval(this.pingInterval); this.wss?.close(); }
 }
 
-export let wsServer: HomeWsServer | null = null;
+// Always a live instance (headless until attachServer/initWebSocket runs) so that
+// broadcast/buffering works in tests and other server-less contexts.
+export let wsServer: HomeWsServer | null = new HomeWsServer();
 
 export function initWebSocket(httpServer: Server): HomeWsServer {
-  wsServer = new HomeWsServer(httpServer);
+  if (!wsServer) wsServer = new HomeWsServer();
+  wsServer.attachServer(httpServer);
   console.log('[WS] WebSocket server initialized on /ws?home_id=<id>');
   return wsServer;
 }

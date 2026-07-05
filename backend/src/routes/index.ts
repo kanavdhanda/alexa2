@@ -11,6 +11,8 @@ import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhras
 import { listModules, getModule, listCategories, getStoreStats, installModule, getInstalledModules, publishModule, generateModuleWithAI, getModuleTemplate } from '../controllers/appStoreController';
 import { logKhata, getKhataLedger, settleKhata } from '../controllers/khataController';
 import { buildScenarioRule } from '../controllers/scenarioBuilderController';
+import { DEMO_STEPS } from '../demoScript';
+import { getBufferedEvents, getLatestSeq } from '../websocket';
 
 const router = Router();
 
@@ -101,6 +103,18 @@ router.post('/homes/:home_id/khata/settle', settleKhata);
 router.post('/admin/run-batch', (_req, res) => {
   const result = runBatch();
   res.json({ message: 'Batch miner ran', ...result });
+});
+
+// ── Demo script (attract loop) ────────────────────────────────────────────────
+router.get('/demo/script', (_req, res) => {
+  res.json({ steps: DEMO_STEPS });
+});
+
+// ── Long-poll fallback (frontend polls every 2.5s when WS is down) ──────────
+router.get('/homes/:home_id/poll', (req, res) => {
+  const since = parseInt((req.query.since as string) || '0', 10) || 0;
+  const events = getBufferedEvents(req.params.home_id, since);
+  res.json({ events, latest_seq: getLatestSeq() });
 });
 
 export default router;
