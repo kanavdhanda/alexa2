@@ -89,7 +89,7 @@ export async function logKhata(req: Request, res: Response) {
     // Broadcast via websocket
     if (wsServer) {
       wsServer.broadcast(home_id, {
-        type: 'khata_entry' as any,
+        type: 'khata_entry',
         home_id,
         payload: { entry, trace },
         timestamp: new Date().toISOString(),
@@ -108,7 +108,7 @@ export async function logKhata(req: Request, res: Response) {
 
     if (wsServer) {
       wsServer.broadcast(home_id, {
-        type: 'khata_entry' as any,
+        type: 'khata_entry',
         home_id,
         payload: { entry, trace },
         timestamp: new Date().toISOString(),

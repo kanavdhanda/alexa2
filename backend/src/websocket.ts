@@ -23,7 +23,8 @@ export interface WsMessage {
     | 'voice_response'
     | 'lookup_request'
     | 'lookup_approved'
-    | 'lookup_result';
+    | 'lookup_result'
+    | 'khata_entry';
   home_id: string;
   payload: any;
   timestamp: string;

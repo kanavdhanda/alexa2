@@ -4,6 +4,20 @@ import { parseKhataUtteranceMock, khataStore } from '../src/khata';
 describe('khata mock parser — deterministic responses', () => {
   beforeEach(() => khataStore.reset());
 
+  test('parses missed milkman day', () => {
+    const result = parseKhataUtteranceMock('doodhwala aaj nahi aaya');
+    expect(result.vendor).toBe('doodhwala');
+    expect(result.kind).toBe('missed');
+    expect(result.quantity).toBe(1);
+  });
+
+  test('parses dhobi clothes count (Hindi number word)', () => {
+    const result = parseKhataUtteranceMock('dhobi ko das kapde diye');
+    expect(result.vendor).toBe('dhobi');
+    expect(result.kind).toBe('items');
+    expect(result.quantity).toBe(10); // "das" → 10
+  });
+
   test('doodhwala: 2 liter milk delivery @ ₹60/L', () => {
     const result = parseKhataUtteranceMock('Doodhwala ne 2 liter doodh deliver kiya, ₹60 per liter');
     expect(result.vendor).toBe('doodhwala');

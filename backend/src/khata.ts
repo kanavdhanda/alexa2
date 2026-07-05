@@ -24,6 +24,10 @@ export interface VendorLedger {
   subtotal_inr: number;
 }
 
+const HINDI_NUMS: Record<string, number> = {
+  ek: 1, do: 2, teen: 3, char: 4, paanch: 5, chhe: 6, saat: 7, aath: 8, nau: 9, das: 10, bees: 20,
+};
+
 const vendorMap: Record<string, { vendor: 'doodhwala' | 'dhobi' | 'maid' | 'newspaper'; vendor_hi: string; rate: number }> = {
   doodhwala: { vendor: 'doodhwala', vendor_hi: 'दूधवाला', rate: 60 },
   dhobi: { vendor: 'dhobi', vendor_hi: 'धोबी', rate: 30 },
@@ -53,7 +57,9 @@ export function parseKhataUtteranceMock(utterance: string): KhataEntry {
 
   // Extract quantity and unit
   const numberMatch = utterance.match(/(\d+)/);
+  const hindiNumWord = Object.keys(HINDI_NUMS).find(w => new RegExp(`\\b${w}\\b`).test(lower));
   if (numberMatch) quantity = parseInt(numberMatch[1], 10);
+  else if (hindiNumWord) quantity = HINDI_NUMS[hindiNumWord];
 
   if (lower.includes('liter')) unit = 'liter';
   else if (lower.includes('kapde') || lower.includes('items')) unit = 'items';
@@ -97,8 +103,9 @@ export function parseKhataUtteranceMock(utterance: string): KhataEntry {
 class KhataStore {
   private byHome = new Map<string, KhataEntry[]>();
 
-  reset() {
-    this.byHome.clear();
+  reset(homeId?: string) {
+    if (homeId) this.byHome.delete(homeId);
+    else this.byHome.clear();
   }
 
   add(homeId: string, entry: KhataEntry) {
