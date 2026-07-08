@@ -4,3 +4,5 @@ backend/.env
 *.js.map
 extra/
 frontend/
+.tokensave/
+.claude
