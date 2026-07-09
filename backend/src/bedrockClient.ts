@@ -15,7 +15,12 @@ import { authorizeTool, AuthorizationContext } from './authorizer';
 
 dotenv.config();
 
-const MODEL_ID = process.env.BEDROCK_MODEL_ID || 'amazon.nova-micro-v1:0';
+// T2: fast triage/routing — Nova Micro ($0.000035/1K tok, <200ms)
+// T3: agentic specialist execution — Claude Haiku ($0.00025/1K tok input, better tool use)
+const T2_MODEL_ID = process.env.T2_MODEL_ID || 'amazon.nova-micro-v1:0';
+const T3_MODEL_ID = process.env.T3_MODEL_ID || 'anthropic.claude-haiku-4-5-20251001';
+// Legacy fallback for other controllers that still read BEDROCK_MODEL_ID
+const MODEL_ID = process.env.BEDROCK_MODEL_ID || T2_MODEL_ID;
 
 export const bedrockClient = new BedrockRuntimeClient({
   region: process.env.AWS_REGION || 'us-east-1',
@@ -271,7 +276,7 @@ ${homeContext}`;
   const userMsg = `Request: ${input.anomaly_description}\nEvent: ${JSON.stringify(input.event_data).substring(0, 300)}`;
 
   const params: ConverseCommandInput = {
-    modelId: MODEL_ID,
+    modelId: T2_MODEL_ID,
     system: [{ text: triagePrompt }],
     messages: [{ role: 'user', content: [{ text: userMsg }] }],
     inferenceConfig: { maxTokens: 80, temperature: 0.1 },
@@ -332,7 +337,7 @@ Take appropriate actions using your available tools.`;
   while (iterations < 3) {
     iterations++;
     const params: ConverseCommandInput = {
-      modelId: MODEL_ID,
+      modelId: T3_MODEL_ID,
       system: [{ text: systemPrompt }],
       messages,
       inferenceConfig: { maxTokens: 300, temperature: 0.2 },
@@ -430,7 +435,7 @@ export async function runSupervisorAgent(
     const totalTokens = triageTokens + specialistTokens;
 
     return {
-      model_id: MODEL_ID,
+      model_id: T3_MODEL_ID,
       reasoning,
       tool_calls,
       final_plan: `${routing.specialist} specialist executed ${tool_calls.length} action(s): ${tool_calls.map(t => t.tool_name).join(', ') || 'none'}`,
