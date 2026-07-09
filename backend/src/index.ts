@@ -28,9 +28,12 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// ── Per-IP Rate Limiter (no external package needed) ──────────────────────────
-const IP_WINDOW_MS = 60_000;      // 1-minute window
-const IP_MAX_REQUESTS = 60;       // max 60 req/min per IP (well above normal use, blocks spam)
+// ── Per-IP Rate Limiter ───────────────────────────────────────────────────────
+// Strict: demo is controlled, small known audience.
+// 10 req/min = 1 voice query every 6s — more than enough for a live demo.
+// Busts to 429 instantly beyond that, protecting Bedrock quota.
+const IP_WINDOW_MS = 60_000;
+const IP_MAX_REQUESTS = 10;
 const ipHits = new Map<string, { count: number; resetAt: number }>();
 setInterval(() => {
   const now = Date.now();

@@ -6,17 +6,40 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - AWS_REGION=us-east-1
-      - BEDROCK_MODEL_ID=amazon.nova-micro-v1:0
-      - MOCK_LLM=false
+      # ── Server ──────────────────────────────────────────────────────────────
       - NODE_ENV=production
       - PORT=3001
+
+      # ── AWS ─────────────────────────────────────────────────────────────────
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+
+      # ── Bedrock models ──────────────────────────────────────────────────────
+      # T2: fast triage/routing — Nova Micro
+      - T2_MODEL_ID=${T2_MODEL_ID:-amazon.nova-micro-v1:0}
+      # T3: agentic specialist — Claude Haiku
+      - T3_MODEL_ID=${T3_MODEL_ID:-anthropic.claude-haiku-4-5-20251001}
+      # Legacy fallback for other controllers
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-amazon.nova-micro-v1:0}
+      - MOCK_LLM=false
+
+      # ── API security ─────────────────────────────────────────────────────────
+      # Must match VITE_API_SECRET_KEY on the frontend build
+      - API_SECRET_KEY=${API_SECRET_KEY}
+      - LOGS_ACCESS_KEY=${LOGS_ACCESS_KEY:-admin_logs}
+
+      # ── CORS ────────────────────────────────────────────────────────────────
       - ALLOWED_ORIGINS=https://alexa2-frontend.vercel.app
+
+      # ── TTS / STT ───────────────────────────────────────────────────────────
       - SARVAM_API_KEY=${SARVAM_API_KEY:-}
+      - POLLY_DEFAULT_VOICE=${POLLY_DEFAULT_VOICE:-kajal}
+      - S3_BUCKET=${S3_BUCKET:-alexa-india-audio}
+
+      # ── Misc ────────────────────────────────────────────────────────────────
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      - S3_BUCKET=alexa-india-audio
+
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
       interval: 10s
