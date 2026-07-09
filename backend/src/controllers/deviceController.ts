@@ -64,7 +64,10 @@ export function registerDevice(req: Request, res: Response) {
     module_attached = { module_id: matchedModule.module_id, name: matchedModule.name, extra_rules };
   }
 
-  wsServer?.broadcastDeviceUpdate(home_id, device_id, 'registered', device);
+  wsServer?.broadcastDeviceUpdate(home_id, device_id, 'registered', {
+    ...device,
+    module_attached,
+  });
 
   return res.status(201).json({
     message: `Device ${device_id} registered`,
