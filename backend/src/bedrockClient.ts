@@ -406,40 +406,45 @@ export async function runSupervisorAgent(
     throw new Error(`Rate limit exceeded for ${input.home_id}: ${rateCheck.calls_this_minute}/min (max 15). Retry in ${rateCheck.retry_after_seconds}s.`);
   }
 
-  // 3. Build home context summary for triage
-  const home = stateStore.get(input.home_id);
-  const regime = home.current_regime;
-  const roomType = (input.room_type || 'other') as any;
-  const roomContext = buildSystemPromptContext(roomType, regime);
-  const regimeNote = getRegimeContextNote(regime);
-  const homeContext = `Regime: ${regime.toUpperCase()} (${regimeNote}) | T0 rules: ${home.t0_rules.length} | Room: ${input.room_type ?? 'unknown'}\n${roomContext}`;
+  try {
+    // 3. Build home context summary for triage
+    const home = stateStore.get(input.home_id);
+    const regime = home.current_regime;
+    const roomType = (input.room_type || 'other') as any;
+    const roomContext = buildSystemPromptContext(roomType, regime);
+    const regimeNote = getRegimeContextNote(regime);
+    const homeContext = `Regime: ${regime.toUpperCase()} (${regimeNote}) | T0 rules: ${home.t0_rules.length} | Room: ${input.room_type ?? 'unknown'}\n${roomContext}`;
 
-  // 4. STEP 1 — Supervisor triage: fast classification call, forced single tool use
-  const routing = await callSupervisorTriage(input, homeContext);
+    // 4. STEP 1 — Supervisor triage: fast classification call, forced single tool use
+    const routing = await callSupervisorTriage(input, homeContext);
 
-  const triageTokens = 220;
-  const triageCost = ((triageTokens * 0.000035) / 1000).toFixed(6);
+    const triageTokens = 220;
+    const triageCost = ((triageTokens * 0.000035) / 1000).toFixed(6);
 
-  // 5. STEP 2 — Specialist agent: focused call with only the specialist's tools
-  const { tool_calls, reasoning } = await runSpecialistAgent(routing.specialist, input, authContext);
+    // 5. STEP 2 — Specialist agent: focused call with only the specialist's tools
+    const { tool_calls, reasoning } = await runSpecialistAgent(routing.specialist, input, authContext);
 
-  const specialistTokens = 400 + tool_calls.length * 120;
-  const specialistCost = ((specialistTokens * 0.000035) / 1000).toFixed(6);
-  const totalCost = (parseFloat(triageCost) + parseFloat(specialistCost)).toFixed(6);
-  const totalTokens = triageTokens + specialistTokens;
+    const specialistTokens = 400 + tool_calls.length * 120;
+    const specialistCost = ((specialistTokens * 0.000035) / 1000).toFixed(6);
+    const totalCost = (parseFloat(triageCost) + parseFloat(specialistCost)).toFixed(6);
+    const totalTokens = triageTokens + specialistTokens;
 
-  return {
-    model_id: MODEL_ID,
-    reasoning,
-    tool_calls,
-    final_plan: `${routing.specialist} specialist executed ${tool_calls.length} action(s): ${tool_calls.map(t => t.tool_name).join(', ') || 'none'}`,
-    escalation_cost_estimate: `~$${totalCost} USD (est. ${totalTokens} tokens, 2× Nova Micro — triage + specialist)`,
-    is_mock: false,
-    routing: {
-      specialist: routing.specialist,
-      intent_summary: routing.intent_summary,
-      reason: routing.reason,
-      triage_cost_estimate: `~$${triageCost} USD`,
-    },
-  };
+    return {
+      model_id: MODEL_ID,
+      reasoning,
+      tool_calls,
+      final_plan: `${routing.specialist} specialist executed ${tool_calls.length} action(s): ${tool_calls.map(t => t.tool_name).join(', ') || 'none'}`,
+      escalation_cost_estimate: `~$${totalCost} USD (est. ${totalTokens} tokens, 2× Nova Micro — triage + specialist)`,
+      is_mock: false,
+      routing: {
+        specialist: routing.specialist,
+        intent_summary: routing.intent_summary,
+        reason: routing.reason,
+        triage_cost_estimate: `~$${triageCost} USD`,
+      },
+    };
+  } catch (err: any) {
+    console.warn(`[BedrockClient] Bedrock agent call failed: ${err.message}. Falling back to local mock LLM.`);
+    return financialSafety.getMockResult(input.anomaly_description, input.home_id);
+  }
 }
