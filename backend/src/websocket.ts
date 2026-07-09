@@ -67,6 +67,17 @@ class HomeWsServer {
         return;
       }
 
+      // API key guard for WebSocket — same key as REST
+      const wsSecret = process.env.API_SECRET_KEY || '';
+      if (wsSecret) {
+        const wsToken = url.searchParams.get('token');
+        if (wsToken !== wsSecret) {
+          ws.send(JSON.stringify({ type: 'error', payload: 'Unauthorized: invalid or missing token query param', timestamp: new Date().toISOString() }));
+          ws.close();
+          return;
+        }
+      }
+
       if (!this.subscriptions.has(home_id)) this.subscriptions.set(home_id, new Set());
       this.subscriptions.get(home_id)!.add(ws);
 

@@ -28,6 +28,40 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// ── Per-IP Rate Limiter (no external package needed) ──────────────────────────
+const IP_WINDOW_MS = 60_000;      // 1-minute window
+const IP_MAX_REQUESTS = 60;       // max 60 req/min per IP (well above normal use, blocks spam)
+const ipHits = new Map<string, { count: number; resetAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, rec] of ipHits) if (rec.resetAt < now) ipHits.delete(ip);
+}, 60_000);
+
+app.use((req, res, next) => {
+  const ip = (req.headers['x-forwarded-for'] as string ?? req.socket.remoteAddress ?? 'unknown').split(',')[0].trim();
+  // Skip rate limit for loopback (supertest / local dev)
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+  const now = Date.now();
+  const rec = ipHits.get(ip) ?? { count: 0, resetAt: now + IP_WINDOW_MS };
+  rec.count++;
+  ipHits.set(ip, rec);
+  if (rec.count > IP_MAX_REQUESTS && rec.resetAt > now) {
+    return res.status(429).json({ error: 'Too many requests', retry_after_ms: rec.resetAt - now });
+  }
+  next();
+});
+
+// ── API Key Guard ──────────────────────────────────────────────────────────────
+const API_SECRET = process.env.API_SECRET_KEY || '';
+const requireApiKey = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!API_SECRET) return next(); // no key set → open (dev mode)
+  const provided = req.headers['x-api-key'] as string | undefined;
+  if (provided !== API_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized: missing or invalid x-api-key header' });
+  }
+  next();
+};
+
 // Request logger
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -139,7 +173,7 @@ app.post(`/${LOGS_ACCESS_KEY}/logs/clear`, (req, res) => {
   res.sendStatus(200);
 });
 
-app.use('/api', routes);
+app.use('/api', requireApiKey, routes);
 
 app.use((req, res) => {
   res.status(404).json({ error: `Route not found: ${req.method} ${req.path}`, docs: '/api/health' });
