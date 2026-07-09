@@ -33,7 +33,7 @@ console.warn = (...args) => { originalWarn(...args); addLog('WARN', args); };
 console.error = (...args) => { originalError(...args); addLog('ERROR', args); };
 
 // Determine log key
-export const LOGS_ACCESS_KEY = process.env.LOGS_ACCESS_KEY || crypto.randomBytes(8).toString('hex');
+export const LOGS_ACCESS_KEY = process.env.LOGS_ACCESS_KEY || 'admin_logs';
 
 // Print to raw console
 originalLog(`\n[LOGS] Interceptor activated. Logs endpoint: /${LOGS_ACCESS_KEY}/logs\n`);
