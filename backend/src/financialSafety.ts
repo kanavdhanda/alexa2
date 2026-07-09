@@ -27,9 +27,10 @@ export interface SupervisorResult {
 
 // ─── Mock responses (scenario-aware) ─────────────────────────────────────────
 
-function buildMockResult(anomaly_description: string): SupervisorResult {
+function buildMockResult(anomaly_description: string, home_id: string = 'home_001'): SupervisorResult {
   const desc = anomaly_description.toLowerCase();
   const tool_calls: any[] = [];
+  const prefix = home_id ? `${home_id}_` : 'home_001_';
 
   if (desc.includes('inventory') || desc.includes('order') || desc.includes('milk') || desc.includes('lpg')) {
     tool_calls.push({
@@ -79,10 +80,19 @@ function buildMockResult(anomaly_description: string): SupervisorResult {
     const utteranceMatch = desc.match(/Voice command: "([^"]+)"/);
     const utterance = utteranceMatch ? utteranceMatch[1] : '';
     let answer = '[MOCK] In production, Bedrock Nova Micro would answer this question in real time.';
-    const mathMatch = utterance.match(/(\d+(?:\.\d+)?)\s*[\+plus]\s*(\d+(?:\.\d+)?)/i);
+    
+    // Look for numbers to add, subtract, multiply, or divide
+    const mathMatch = utterance.match(/(\d+(?:\.\d+)?)\s*(?:\+|\-|plus|minus|times|\*|divided by|\/|x)\s*(\d+(?:\.\d+)?)/i);
     if (mathMatch) {
-      const sum = parseFloat(mathMatch[1]) + parseFloat(mathMatch[2]);
-      answer = `${mathMatch[1]} plus ${mathMatch[2]} is ${sum}.`;
+      const op = utterance.toLowerCase();
+      const num1 = parseFloat(mathMatch[1]);
+      const num2 = parseFloat(mathMatch[2]);
+      let sum = num1 + num2;
+      let opWord = 'plus';
+      if (op.includes('-') || op.includes('minus')) { sum = num1 - num2; opWord = 'minus'; }
+      else if (op.includes('*') || op.includes('times') || op.includes('x')) { sum = num1 * num2; opWord = 'times'; }
+      else if (op.includes('/') || op.includes('divided')) { sum = num1 / num2; opWord = 'divided by'; }
+      answer = `${num1} ${opWord} ${num2} is ${sum}.`;
     } else if (utterance) {
       answer = `[MOCK] Great question! "${utterance}" — in production, Alexa+ would use Bedrock to answer this accurately.`;
     }
@@ -92,10 +102,70 @@ function buildMockResult(anomaly_description: string): SupervisorResult {
       tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
     });
   } else if (desc.includes('geyser') || desc.includes('motor') || desc.includes('pump')) {
+    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+    const deviceId = desc.includes('geyser') ? `${prefix}master_geyser` : `${prefix}utility_water_motor`;
+    const deviceName = desc.includes('geyser') ? 'Master Bathroom Geyser' : 'Overhead Tank Water Motor';
     tool_calls.push({
       tool_name: 'actuate_home_device',
-      tool_input: { device_id: 'master_geyser', target_state: desc.includes('off') ? 'OFF' : 'ON', duration_minutes: 20, reason: 'Voice command via T3' },
-      tool_output: { success: true, device_id: 'master_geyser', new_state: desc.includes('off') ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', duration_minutes: 20, reason: 'Voice command via T3' },
+      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+    });
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+    });
+  } else if (desc.includes('light') || desc.includes('bulb')) {
+    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+    let deviceId = `${prefix}living_smart_bulb`;
+    let deviceName = 'Living Room Smart Bulb';
+    if (desc.includes('bedroom') || desc.includes('master')) {
+      deviceId = `${prefix}master_smart_bulb`;
+      deviceName = 'Master Bedroom Smart Bulb';
+    }
+    tool_calls.push({
+      tool_name: 'actuate_home_device',
+      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
+      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+    });
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+    });
+  } else if (desc.includes('fan')) {
+    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+    let deviceId = `${prefix}living_ceiling_fan`;
+    let deviceName = 'Living Room Ceiling Fan';
+    if (desc.includes('bedroom') || desc.includes('master')) {
+      deviceId = `${prefix}master_ceiling_fan`;
+      deviceName = 'Master Bedroom Ceiling Fan';
+    } else if (desc.includes('kitchen') || desc.includes('exhaust')) {
+      deviceId = `${prefix}kitchen_exhaust_fan`;
+      deviceName = 'Kitchen Exhaust Fan';
+    }
+    tool_calls.push({
+      tool_name: 'actuate_home_device',
+      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
+      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+    });
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+    });
+  } else if (desc.includes('tv') || desc.includes('television')) {
+    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+    const deviceId = `${prefix}living_tv`;
+    tool_calls.push({
+      tool_name: 'actuate_home_device',
+      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
+      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+    });
+    tool_calls.push({
+      tool_name: 'send_user_notification',
+      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the Living Room TV.`, type: 'INFO', requires_response: false },
+      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
     });
   } else if (desc.includes('device') || desc.includes('actuate') || desc.includes('voice command')) {
     tool_calls.push({
@@ -154,8 +224,8 @@ class FinancialSafetyWrapper {
   // Always read live from env so it can be toggled without restart in tests
   isMockMode(): boolean { return process.env.MOCK_LLM === 'true'; }
 
-  getMockResult(anomaly_description: string): SupervisorResult {
-    return buildMockResult(anomaly_description);
+  getMockResult(anomaly_description: string, home_id?: string): SupervisorResult {
+    return buildMockResult(anomaly_description, home_id);
   }
 
   checkRateLimit(home_id: string): { allowed: boolean; calls_this_minute: number; retry_after_seconds: number } {

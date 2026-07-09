@@ -397,7 +397,7 @@ export async function runSupervisorAgent(
 ): Promise<SupervisorResult> {
   // 1. Mock mode check
   if (financialSafety.isMockMode()) {
-    return financialSafety.getMockResult(input.anomaly_description);
+    return financialSafety.getMockResult(input.anomaly_description, input.home_id);
   }
 
   // 2. Rate limit check
