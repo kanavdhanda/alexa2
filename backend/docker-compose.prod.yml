@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
+    secrets:
+      - groq_api_key
     environment:
       # ── Server ──────────────────────────────────────────────────────────────
       - NODE_ENV=production
@@ -46,3 +48,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+secrets:
+  groq_api_key:
+    file: ./secrets/groq_api_key

@@ -3,7 +3,8 @@ import { appStore, AppStoreModule } from '../appStore';
 import { stateStore } from '../stateStore';
 import { generateAutoT0Rules } from '../deviceRegistry';
 import { financialSafety } from '../financialSafety';
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { bedrockClient } from '../bedrockClient';
 
 // ─── Browse & Search ──────────────────────────────────────────────────────────
 
@@ -215,7 +216,6 @@ export async function generateModuleWithAI(req: Request, res: Response) {
   }
 
   try {
-    const client = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
     const prompt = `You are an expert in smart home device adapters and the Model Context Protocol (MCP).
 
@@ -278,22 +278,18 @@ Return a JSON object with these exact fields:
 Be specific to India context (power cuts, hard water, Indian cooking, festivals, Indian brands/power grid).
 Return ONLY valid JSON, no markdown.`;
 
-    const result = await financialSafety.withTimeout(
-      client.send(new InvokeModelCommand({
+    const response = await financialSafety.withTimeout(
+      bedrockClient.send(new ConverseCommand({
         modelId: process.env.BEDROCK_MODEL_ID || 'amazon.nova-micro-v1:0',
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-          inferenceConfig: { maxTokens: 2048, temperature: 0.3 },
-        }),
+        system: [{ text: 'You are an expert in smart home device adapters and the Model Context Protocol (MCP).' }],
+        messages: [{ role: 'user', content: [{ text: prompt }] }],
+        inferenceConfig: { maxTokens: 2048, temperature: 0.3 },
       })),
       15000,
       'AI module generation'
     );
 
-    const responseBody = JSON.parse(new TextDecoder().decode(result.body));
-    const text = responseBody.output?.message?.content?.[0]?.text || '';
+    const text = response.output?.message?.content?.[0]?.text || '';
 
     // Strip markdown if present
     const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();

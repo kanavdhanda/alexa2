@@ -15,12 +15,30 @@ import {
 import FormData from 'form-data';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 dotenv.config();
 
 const IS_MOCK  = process.env.MOCK_LLM === 'true';
 const REGION   = process.env.AWS_REGION || 'us-east-1';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+
+let cachedGroqApiKey: string | undefined = undefined;
+export function getGroqApiKey(): string {
+  if (cachedGroqApiKey !== undefined) return cachedGroqApiKey;
+  if (process.env.GROQ_API_KEY) {
+    cachedGroqApiKey = process.env.GROQ_API_KEY;
+  } else {
+    const secretPath = '/run/secrets/groq_api_key';
+    if (fs.existsSync(secretPath)) {
+      try {
+        cachedGroqApiKey = fs.readFileSync(secretPath, 'utf8').trim();
+      } catch (e) {
+        console.error(`Failed to read Groq API key from docker secrets:`, e);
+      }
+    }
+  }
+  return cachedGroqApiKey || '';
+}
 
 // ─── AWS Polly Client ─────────────────────────────────────────────────────────
 
@@ -229,7 +247,8 @@ export async function transcribeAudioWithGroq(
   audioBuffer: Buffer,
   mimeType: string = 'audio/webm',
 ): Promise<TranscribeResult> {
-  if (IS_MOCK || !GROQ_API_KEY) {
+  const apiKey = getGroqApiKey();
+  if (IS_MOCK || !apiKey) {
     const reason = IS_MOCK ? 'MOCK_LLM=true' : 'GROQ_API_KEY not set';
     return {
       transcript: `[MOCK STT] ${reason} — real transcription disabled.`,
@@ -251,7 +270,7 @@ export async function transcribeAudioWithGroq(
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${GROQ_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       ...form.getHeaders(),
     },
     body: form,

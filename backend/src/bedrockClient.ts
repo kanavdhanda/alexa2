@@ -12,6 +12,7 @@ import { buildSystemPromptContext } from './knowledgePacks';
 import { getRegimeContextNote } from './regimeEngine';
 import { stateStore } from './stateStore';
 import { authorizeTool, AuthorizationContext } from './authorizer';
+import { getGroqApiKey } from './voiceModule';
 
 dotenv.config();
 
@@ -34,6 +35,215 @@ export const bedrockClient = new BedrockRuntimeClient({
       }
     : {}),
 });
+
+// ─── Groq API Fallback Helper ────────────────────────────────────────────────
+function mapBedrockMessagesToGroq(params: ConverseCommandInput): any[] {
+  const groqMessages: any[] = [];
+
+  if (params.system) {
+    for (const sys of params.system) {
+      if (sys.text) {
+        groqMessages.push({ role: 'system', content: sys.text });
+      }
+    }
+  }
+
+  if (params.messages) {
+    for (const msg of params.messages) {
+      const role = msg.role;
+      const contentBlocks = msg.content || [];
+      
+      let textContent = '';
+      const toolCalls: any[] = [];
+      const toolResults: any[] = [];
+      
+      for (const block of contentBlocks) {
+        if ('text' in block && block.text) {
+          textContent += block.text;
+        } else if ('toolUse' in block && block.toolUse) {
+          const tu = block.toolUse;
+          toolCalls.push({
+            id: tu.toolUseId,
+            type: 'function',
+            function: {
+              name: tu.name,
+              arguments: JSON.stringify(tu.input),
+            },
+          });
+        } else if ('toolResult' in block && block.toolResult) {
+          const tr = block.toolResult;
+          const jsonVal = tr.content?.[0]?.json;
+          toolResults.push({
+            role: 'tool',
+            tool_call_id: tr.toolUseId,
+            content: JSON.stringify(jsonVal || {}),
+          });
+        }
+      }
+      
+      if (toolResults.length > 0) {
+        for (const tr of toolResults) {
+          groqMessages.push(tr);
+        }
+      } else if (toolCalls.length > 0) {
+        groqMessages.push({
+          role: 'assistant',
+          content: textContent || null,
+          tool_calls: toolCalls,
+        });
+      } else {
+        groqMessages.push({
+          role: role,
+          content: textContent,
+        });
+      }
+    }
+  }
+
+  return groqMessages;
+}
+
+function mapBedrockToolsToGroq(params: ConverseCommandInput): any[] | undefined {
+  if (!params.toolConfig?.tools) return undefined;
+  
+  return params.toolConfig.tools.map((tool: any) => {
+    return {
+      type: 'function',
+      function: {
+        name: tool.toolSpec.name,
+        description: tool.toolSpec.description,
+        parameters: tool.toolSpec.inputSchema?.json,
+      },
+    };
+  });
+}
+
+function mapGroqResponseToBedrock(groqResJson: any): any {
+  const choice = groqResJson.choices?.[0];
+  const msg = choice?.message;
+  const contentBlocks: any[] = [];
+
+  if (msg?.content) {
+    contentBlocks.push({ text: msg.content });
+  }
+
+  if (msg?.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      let parsedInput = {};
+      try {
+        parsedInput = JSON.parse(tc.function.arguments || '{}');
+      } catch (e) {
+        console.error('[GroqFallback] Failed to parse tool call arguments:', tc.function.arguments);
+      }
+      contentBlocks.push({
+        toolUse: {
+          toolUseId: tc.id,
+          name: tc.function.name,
+          input: parsedInput,
+        },
+      });
+    }
+  }
+
+  const stopReasonMap: Record<string, string> = {
+    stop: 'end_turn',
+    tool_calls: 'tool_use',
+    length: 'max_tokens',
+  };
+
+  return {
+    output: {
+      message: {
+        role: 'assistant',
+        content: contentBlocks,
+      },
+    },
+    stopReason: stopReasonMap[choice?.finish_reason || ''] || 'end_turn',
+    usage: {
+      inputTokens: groqResJson.usage?.prompt_tokens || 0,
+      outputTokens: groqResJson.usage?.completion_tokens || 0,
+      totalTokens: groqResJson.usage?.total_tokens || 0,
+    },
+    _fallbackModel: groqResJson.model,
+    $metadata: {
+      httpStatusCode: 200,
+    },
+  };
+}
+
+async function callGroqFallback(params: ConverseCommandInput): Promise<any> {
+  const groqMessages = mapBedrockMessagesToGroq(params);
+  const groqTools = mapBedrockToolsToGroq(params);
+  const model = process.env.GROQ_FALLBACK_MODEL || 'llama-3.3-70b-versatile';
+  
+  const body: any = {
+    model: model,
+    messages: groqMessages,
+    temperature: params.inferenceConfig?.temperature ?? 0.2,
+    max_tokens: params.inferenceConfig?.maxTokens ?? 1000,
+  };
+  
+  if (groqTools && groqTools.length > 0) {
+    body.tools = groqTools;
+    if (params.toolConfig?.toolChoice) {
+      if ('any' in params.toolConfig.toolChoice) {
+        body.tool_choice = 'required';
+      } else if ('auto' in params.toolConfig.toolChoice) {
+        body.tool_choice = 'auto';
+      } else if ('tool' in params.toolConfig.toolChoice) {
+        body.tool_choice = {
+          type: 'function',
+          function: { name: params.toolConfig.toolChoice.tool.name }
+        };
+      }
+    }
+  }
+
+  console.log(`[GroqFallback] Requesting Groq completions: ${model}, messages: ${groqMessages.length}, tools: ${groqTools?.length || 0}`);
+  
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${getGroqApiKey()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Groq API error: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+
+  const resultJson = await response.json() as any;
+  console.log(`[GroqFallback] Groq response successful. Finish reason: ${resultJson.choices?.[0]?.finish_reason}`);
+  return mapGroqResponseToBedrock(resultJson);
+}
+
+// Override bedrockClient.send
+const originalSend = bedrockClient.send.bind(bedrockClient);
+bedrockClient.send = async function (command: any, options?: any) {
+  try {
+    return await originalSend(command, options);
+  } catch (err: any) {
+    console.warn(`[BedrockClient] Bedrock command failed: ${err.message || err}`);
+    if (command && command.input && typeof command.input === 'object') {
+      const groqApiKey = getGroqApiKey();
+      if (!groqApiKey) {
+        console.error(`[BedrockClient] Groq API Key (GROQ_API_KEY) not found. Cannot fallback.`);
+        throw err;
+      }
+      console.log(`[BedrockClient] Falling back to Groq Chat Completions...`);
+      try {
+        return await callGroqFallback(command.input);
+      } catch (groqErr: any) {
+        console.error(`[BedrockClient] Groq fallback also failed: ${groqErr.message || groqErr}`);
+        throw err;
+      }
+    }
+    throw err;
+  }
+};
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -262,7 +472,7 @@ async function executeTool(
 async function callSupervisorTriage(
   input: SupervisorInput,
   homeContext: string,
-): Promise<{ specialist: Specialist; intent_summary: string; reason: string }> {
+): Promise<{ specialist: Specialist; intent_summary: string; reason: string; _fallbackModel?: string }> {
   const triagePrompt = `You are the Supervisor Agent for a multi-agent smart home AI.
 Your ONLY job: classify this request and call route_to_specialist ONCE.
 
@@ -299,12 +509,18 @@ ${homeContext}`;
         specialist: inp.specialist as Specialist,
         intent_summary: inp.intent_summary ?? '',
         reason: inp.reason ?? '',
+        _fallbackModel: (response as any)._fallbackModel,
       };
     }
   }
 
   // Fallback if model doesn't call the tool
-  return { specialist: 'HOME_CONTROL', intent_summary: input.anomaly_description.substring(0, 60), reason: 'triage fallback' };
+  return {
+    specialist: 'HOME_CONTROL',
+    intent_summary: input.anomaly_description.substring(0, 60),
+    reason: 'triage fallback',
+    _fallbackModel: (response as any)._fallbackModel,
+  };
 }
 
 // ─── Specialist agent runner ───────────────────────────────────────────────────
@@ -313,7 +529,7 @@ async function runSpecialistAgent(
   specialist: Specialist,
   input: SupervisorInput,
   authContext?: AuthorizationContext,
-): Promise<{ tool_calls: any[]; reasoning: string }> {
+): Promise<{ tool_calls: any[]; reasoning: string; _fallbackModel?: string }> {
   const systemPrompt = SPECIALIST_SYSTEM_PROMPTS[specialist];
   const tools = SPECIALIST_TOOLS[specialist];
 
@@ -333,6 +549,7 @@ Take appropriate actions using your available tools.`;
   const tool_calls_executed: any[] = [];
   let final_reasoning = '';
   let iterations = 0;
+  let lastFallbackModel: string | undefined = undefined;
 
   while (iterations < 3) {
     iterations++;
@@ -349,6 +566,10 @@ Take appropriate actions using your available tools.`;
       25000,
       `${specialist}Agent iter=${iterations}`
     );
+
+    if ((response as any)._fallbackModel) {
+      lastFallbackModel = (response as any)._fallbackModel;
+    }
 
     const output = response.output?.message;
     if (!output) break;
@@ -381,7 +602,11 @@ Take appropriate actions using your available tools.`;
     }
   }
 
-  return { tool_calls: tool_calls_executed, reasoning: final_reasoning || `${specialist} specialist completed.` };
+  return {
+    tool_calls: tool_calls_executed,
+    reasoning: final_reasoning || `${specialist} specialist completed.`,
+    _fallbackModel: lastFallbackModel,
+  };
 }
 
 // ─── Supervisor agent ─────────────────────────────────────────────────────────
@@ -427,25 +652,30 @@ export async function runSupervisorAgent(
     const triageCost = ((triageTokens * 0.000035) / 1000).toFixed(6);
 
     // 5. STEP 2 — Specialist agent: focused call with only the specialist's tools
-    const { tool_calls, reasoning } = await runSpecialistAgent(routing.specialist, input, authContext);
+    const { tool_calls, reasoning, _fallbackModel } = await runSpecialistAgent(routing.specialist, input, authContext);
 
     const specialistTokens = 400 + tool_calls.length * 120;
     const specialistCost = ((specialistTokens * 0.000035) / 1000).toFixed(6);
     const totalCost = (parseFloat(triageCost) + parseFloat(specialistCost)).toFixed(6);
     const totalTokens = triageTokens + specialistTokens;
 
+    const fallbackModelUsed = _fallbackModel || routing._fallbackModel;
+    const finalModelId = fallbackModelUsed ? `groq/${fallbackModelUsed}` : T3_MODEL_ID;
+
     return {
-      model_id: T3_MODEL_ID,
+      model_id: finalModelId,
       reasoning,
       tool_calls,
       final_plan: `${routing.specialist} specialist executed ${tool_calls.length} action(s): ${tool_calls.map(t => t.tool_name).join(', ') || 'none'}`,
-      escalation_cost_estimate: `~$${totalCost} USD (est. ${totalTokens} tokens, 2× Nova Micro — triage + specialist)`,
+      escalation_cost_estimate: fallbackModelUsed
+        ? `~$0.00 USD (Groq Fallback active)`
+        : `~$${totalCost} USD (est. ${totalTokens} tokens, 2× Nova Micro — triage + specialist)`,
       is_mock: false,
       routing: {
         specialist: routing.specialist,
         intent_summary: routing.intent_summary,
         reason: routing.reason,
-        triage_cost_estimate: `~$${triageCost} USD`,
+        triage_cost_estimate: fallbackModelUsed ? `~$0.00 USD` : `~$${triageCost} USD`,
       },
     };
   } catch (err: any) {
