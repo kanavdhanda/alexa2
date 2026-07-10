@@ -174,7 +174,7 @@ function mapGroqResponseToBedrock(groqResJson: any): any {
 async function callGroqFallback(params: ConverseCommandInput): Promise<any> {
   const groqMessages = mapBedrockMessagesToGroq(params);
   const groqTools = mapBedrockToolsToGroq(params);
-  const model = process.env.GROQ_FALLBACK_MODEL || 'llama-3.3-70b-versatile';
+  const model = process.env.GROQ_FALLBACK_MODEL || 'llama-3.1-8b-instant';
   
   const body: any = {
     model: model,
