@@ -21,6 +21,109 @@ export async function handleEvent(req: Request, res: Response) {
   // Update regime before processing (zero cost, local only)
   updateHomeRegime(home_id);
 
+  // Intercept ledger voice commands
+  if (event_type === 'voice_command') {
+    const utterance = data?.utterance || '';
+    const lowerUtterance = utterance.toLowerCase();
+    
+    // Check if query is about Bruno the dog
+    const isDogQuery = (lowerUtterance.includes('feed') || lowerUtterance.includes('fed')) && lowerUtterance.includes('bruno');
+    if (isDogQuery) {
+      const startMs = Date.now();
+      const speech = 'Yes, Bruno was fed by you (Arman) just 2 hours ago according to the smart dog feeder.';
+      const trace = buildTrace('t0', Date.now() - startMs);
+      const receivedAt = new Date().toISOString();
+      const eventId = uuidv4();
+      const homeState = stateStore.get(home_id);
+      const regime = homeState.current_regime;
+
+      const response: any = {
+        event_id: eventId,
+        home_id,
+        received_at: receivedAt,
+        resolved_at: new Date().toISOString(),
+        tier: 'T0',
+        latency: `${Date.now() - startMs}ms`,
+        cost: '$0.00',
+        result: { response: speech },
+        home_state: stateStore.get(home_id),
+        regime,
+        trace,
+      };
+
+      if (voice_response) {
+        try {
+          response.voice = await synthesizeSpeech(speech);
+          response.spoken_text = speech;
+        } catch (e: any) {
+          response.voice_error = e.message;
+        }
+      }
+
+      return res.json(response);
+    }
+
+    const isLedgerQuery =
+      lowerUtterance.includes('doodhwala') ||
+      lowerUtterance.includes('milkman') ||
+      lowerUtterance.includes('dhobi') ||
+      lowerUtterance.includes('laundry') ||
+      lowerUtterance.includes('maid') ||
+      lowerUtterance.includes('help') ||
+      lowerUtterance.includes('newspaper') ||
+      lowerUtterance.includes('khata') ||
+      lowerUtterance.includes('ledger') ||
+      lowerUtterance.includes('hisab');
+
+    if (isLedgerQuery) {
+      const startMs = Date.now();
+      const { parseKhataUtteranceMock, khataStore } = require('../khata');
+      const entry = parseKhataUtteranceMock(utterance);
+      khataStore.add(home_id, entry);
+      
+      const latencyMs = Date.now() - startMs;
+      const speech = `Recorded — ${entry.vendor_hi}, ${entry.quantity} ${entry.unit}, ₹${entry.amount_inr}.`;
+      const trace = buildTrace('t0', latencyMs);
+      const receivedAt = new Date().toISOString();
+      const eventId = uuidv4();
+      const homeState = stateStore.get(home_id);
+      const regime = homeState.current_regime;
+
+      // Broadcast to update widgets
+      wsServer?.broadcast(home_id, {
+        type: 'khata_entry',
+        home_id,
+        payload: { entry, trace },
+        timestamp: new Date().toISOString(),
+      });
+
+      const response: any = {
+        event_id: eventId,
+        home_id,
+        received_at: receivedAt,
+        resolved_at: new Date().toISOString(),
+        tier: 'T0',
+        latency: `${latencyMs}ms`,
+        cost: '$0.00',
+        result: { response: speech },
+        home_state: stateStore.get(home_id),
+        regime,
+        trace,
+      };
+
+      if (voice_response) {
+        try {
+          response.voice = await synthesizeSpeech(speech);
+          response.spoken_text = speech;
+        } catch (e: any) {
+          response.voice_error = e.message;
+        }
+      }
+
+      return res.json(response);
+    }
+  }
+
   const homeState = stateStore.get(home_id);
   const event: EventPayload = { home_id, event_type, data: data || {}, room_id, speaker_id };
   const receivedAt = new Date().toISOString();

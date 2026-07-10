@@ -17,7 +17,7 @@ Units: liter, items, days, etc.
 Utterance: "${utterance}"
 
 Return exactly this JSON format:
-{"vendor":"doodhwala|dhobi|maid|newspaper","vendor_hi":"Hindi name","kind":"delivery|missed|items|payment","quantity":1,"unit":"liter","amount_inr":100}`;
+{"vendor":"doodhwala|dhobi|maid|newspaper","vendor_hi":"English name","kind":"delivery|missed|items|payment","quantity":1,"unit":"liter","amount_inr":100}`;
 
   const params: ConverseCommandInput = {
     modelId: MODEL_ID,
@@ -82,7 +82,7 @@ export async function logKhata(req: Request, res: Response) {
     const latencyMs = Date.now() - startMs;
 
     // Generate speech response
-    const speech = `Likh liya — ${entry.vendor_hi}, ${entry.quantity} ${entry.unit}, ₹${entry.amount_inr}.`;
+    const speech = `Recorded — ${entry.vendor_hi}, ${entry.quantity} ${entry.unit}, ₹${entry.amount_inr}.`;
 
     const trace = buildTrace(isMock ? 't1' : 't3', latencyMs, isMock ? 0 : 0.000035);
 
@@ -103,7 +103,7 @@ export async function logKhata(req: Request, res: Response) {
     const entry = parseKhataUtteranceMock(utterance);
     khataStore.add(home_id, entry);
     const latencyMs = Date.now() - startMs;
-    const speech = `Likh liya — ${entry.vendor_hi}, ${entry.quantity} ${entry.unit}, ₹${entry.amount_inr}.`;
+    const speech = `Recorded — ${entry.vendor_hi}, ${entry.quantity} ${entry.unit}, ₹${entry.amount_inr}.`;
     const trace = buildTrace('t1', latencyMs, 0);
 
     if (wsServer) {
@@ -128,6 +128,22 @@ export function getKhataLedger(req: Request, res: Response) {
 export function settleKhata(req: Request, res: Response) {
   const home_id = req.params['home_id'] as string;
   const { lines, total_inr, upi_link } = khataStore.settle(home_id);
-  const speech = `Is mahine ka hisab: total ₹${total_inr}. Payment link aapke phone par bhej diya.`;
+  const speech = `This month's ledger: total ₹${total_inr}. Payment link sent to your phone.`;
   return res.json({ lines, total_inr, upi_link, speech });
+}
+
+export function resetKhata(req: Request, res: Response) {
+  const home_id = req.params['home_id'] as string;
+  khataStore.reset(home_id);
+
+  if (wsServer) {
+    wsServer.broadcast(home_id, {
+      type: 'khata_entry',
+      home_id,
+      payload: { reset: true },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  return res.json({ success: true, message: 'Khata ledger cleared' });
 }

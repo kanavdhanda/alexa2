@@ -21,7 +21,7 @@ describe('khata mock parser — deterministic responses', () => {
   test('doodhwala: 2 liter milk delivery @ ₹60/L', () => {
     const result = parseKhataUtteranceMock('Doodhwala ne 2 liter doodh deliver kiya, ₹60 per liter');
     expect(result.vendor).toBe('doodhwala');
-    expect(result.vendor_hi).toBe('दूधवाला');
+    expect(result.vendor_hi).toBe('Milkman');
     expect(result.kind).toBe('delivery');
     expect(result.quantity).toBe(2);
     expect(result.unit).toBe('liter');
@@ -31,7 +31,7 @@ describe('khata mock parser — deterministic responses', () => {
   test('dhobi: 15 items missed pickup', () => {
     const result = parseKhataUtteranceMock('Dhobi ne 15 kapde nahi utha ke gaya');
     expect(result.vendor).toBe('dhobi');
-    expect(result.vendor_hi).toBe('धोबी');
+    expect(result.vendor_hi).toBe('Laundry (Dhobi)');
     expect(result.kind).toBe('missed');
     expect(result.quantity).toBe(15);
     expect(result.unit).toBe('items');
@@ -41,7 +41,7 @@ describe('khata mock parser — deterministic responses', () => {
   test('maid: ₹500 payment', () => {
     const result = parseKhataUtteranceMock('Maid ko 500 rupees pay kiya');
     expect(result.vendor).toBe('maid');
-    expect(result.vendor_hi).toBe('नौकरानी');
+    expect(result.vendor_hi).toBe('House Help (Maid)');
     expect(result.kind).toBe('payment');
     expect(result.amount_inr).toBe(500);
   });
@@ -49,7 +49,7 @@ describe('khata mock parser — deterministic responses', () => {
   test('newspaper: 30 days delivery', () => {
     const result = parseKhataUtteranceMock('Newspaper wala 30 din ka bill laya');
     expect(result.vendor).toBe('newspaper');
-    expect(result.vendor_hi).toBe('अखबार वाला');
+    expect(result.vendor_hi).toBe('Newspaper');
     expect(result.kind).toBe('delivery');
     expect(result.quantity).toBe(30);
     expect(result.unit).toBe('days');

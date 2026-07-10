@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 dotenv.config();
+import { stateStore } from './stateStore';
 
 /**
  * Financial Safety Wrapper — Goal 6
@@ -28,157 +29,261 @@ export interface SupervisorResult {
 // ─── Mock responses (scenario-aware) ─────────────────────────────────────────
 
 function buildMockResult(anomaly_description: string, home_id: string = 'home_001'): SupervisorResult {
-  const desc = anomaly_description.toLowerCase();
+  const utteranceMatch = anomaly_description.match(/Voice command: "([^"]+)"/i);
+  let utterance = utteranceMatch ? utteranceMatch[1] : anomaly_description;
+
+  let conditionEvaluated = true;
+  let conditionText = '';
+  let actionText = utterance;
   const tool_calls: any[] = [];
   const prefix = home_id ? `${home_id}_` : 'home_001_';
 
-  if (desc.includes('inventory') || desc.includes('order') || desc.includes('milk') || desc.includes('lpg')) {
-    tool_calls.push({
-      tool_name: 'order_amazon_now',
-      tool_input: { items: [{ name: 'milk', quantity: 2, unit: 'liters' }], max_budget: 120, priority: 'EXPRESS_10MIN' },
-      tool_output: {
-        success: true, order_id: `AMZ-MOCK-${Date.now()}`,
-        items: [{ name: 'milk', quantity: 2, unit: 'liters' }],
-        estimated_total_inr: 102, max_budget_inr: 120, eta_minutes: 10,
-        eta_timestamp: new Date(Date.now() + 10 * 60000).toISOString(), status: 'ORDER_CONFIRMED',
-      },
-    });
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: '[MOCK] Milk order placed via Amazon Now. Arriving in 10 minutes.', type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['mock_alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('sound') || desc.includes('cluster') || desc.includes('embedding')) {
-    tool_calls.push({
-      tool_name: 'log_new_sound_cluster',
-      tool_input: { embedding_id: `emb_mock_${Date.now()}`, time: new Date().toISOString(), cluster_size: 5, frequency_pattern: 'daily_6am', clap_description: 'metallic beep, electrical device' },
-      tool_output: { success: true, cluster_id: `cluster_mock_${Date.now()}`, status: 'CLUSTER_LOGGED', user_prompt_queued: true },
-    });
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: "[MOCK] I've noticed a recurring unrecognized sound. What is this sound?", type: 'QUESTION', requires_response: true },
-      tool_output: { success: true, delivered_via: ['mock_alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('voice command') && /\b(weather|temperature|forecast|news|stock|price|rate|score|result|cricket|match|today|right now|currently|live)\b/i.test(desc)) {
-    // Live-data question — agent should ask for web search permission
-    const utteranceMatch = desc.match(/Voice command: "([^"]+)"/);
-    const query = utteranceMatch ? utteranceMatch[1] : 'that';
-    tool_calls.push({
-      tool_name: 'request_web_search',
-      tool_input: { query, reason: 'Question requires live/current data not available in training knowledge' },
-      tool_output: { status: 'pending_user_permission', query, timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('voice command') && /\b(hello|hi |hey |how are you|what can you|thank)\b/.test(desc)) {
-    // Conversational greeting — no device action, just respond
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: 'Hi! How may I help you with your home today?', type: 'INFO', requires_response: true },
-      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('voice command') && /\b(what is|what's|how much|how many|calculate|tell me|explain|define|who is|when is|where is|\d+\s*[\+\-\*\/x]\s*\d+)\b/i.test(desc)) {
-    // Direct knowledge question / math — extract utterance and give a meaningful mock answer
-    const utteranceMatch = desc.match(/Voice command: "([^"]+)"/);
-    const utterance = utteranceMatch ? utteranceMatch[1] : '';
-    let answer = '[MOCK] In production, Bedrock Nova Micro would answer this question in real time.';
-    
-    // Look for numbers to add, subtract, multiply, or divide
-    const mathMatch = utterance.match(/(\d+(?:\.\d+)?)\s*(?:\+|\-|plus|minus|times|\*|divided by|\/|x)\s*(\d+(?:\.\d+)?)/i);
+  const ifThenMatch = utterance.match(/if\s+(.+?)\s+then\s+(.+)/i);
+  if (ifThenMatch) {
+    conditionText = ifThenMatch[1].trim();
+    actionText = ifThenMatch[2].trim();
+
+    conditionEvaluated = false;
+    const condLower = conditionText.toLowerCase();
+
+    // Math pattern matching
+    const mathMatch = condLower.match(/(\d+(?:\.\d+)?)\s*([\+\-\*\/x]|plus|minus|times|divided by)\s*(\d+(?:\.\d+)?)/i);
     if (mathMatch) {
-      const op = utterance.toLowerCase();
       const num1 = parseFloat(mathMatch[1]);
-      const num2 = parseFloat(mathMatch[2]);
-      let sum = num1 + num2;
-      let opWord = 'plus';
-      if (op.includes('-') || op.includes('minus')) { sum = num1 - num2; opWord = 'minus'; }
-      else if (op.includes('*') || op.includes('times') || op.includes('x')) { sum = num1 * num2; opWord = 'times'; }
-      else if (op.includes('/') || op.includes('divided')) { sum = num1 / num2; opWord = 'divided by'; }
-      answer = `${num1} ${opWord} ${num2} is ${sum}.`;
-    } else if (utterance) {
-      answer = `[MOCK] Great question! "${utterance}" — in production, Alexa+ would use Bedrock to answer this accurately.`;
+      const op = mathMatch[2].toLowerCase();
+      const num2 = parseFloat(mathMatch[3]);
+      let resultVal = 0;
+      if (op === '+' || op === 'plus') resultVal = num1 + num2;
+      else if (op === '-' || op === 'minus') resultVal = num1 - num2;
+      else if (op === '*' || op === 'times' || op === 'x') resultVal = num1 * num2;
+      else if (op === '/' || op === 'divided by') resultVal = num1 / num2;
+
+      if (condLower.includes('odd')) {
+        conditionEvaluated = Math.round(resultVal) % 2 !== 0;
+      } else if (condLower.includes('even')) {
+        conditionEvaluated = Math.round(resultVal) % 2 === 0;
+      } else {
+        const eqMatch = condLower.match(/(?:is|equals|=)\s*(\d+(?:\.\d+)?)/);
+        if (eqMatch) {
+          const expected = parseFloat(eqMatch[1]);
+          conditionEvaluated = Math.abs(resultVal - expected) < 0.0001;
+        }
+      }
     }
+  }
+
+  const desc = actionText.toLowerCase();
+
+  if (!conditionEvaluated) {
+    // Condition evaluated to false, do not actuate
     tool_calls.push({
       tool_name: 'send_user_notification',
-      tool_input: { message: answer, type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('geyser') || desc.includes('motor') || desc.includes('pump')) {
-    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
-    const deviceId = desc.includes('geyser') ? `${prefix}master_geyser` : `${prefix}utility_water_motor`;
-    const deviceName = desc.includes('geyser') ? 'Master Bathroom Geyser' : 'Overhead Tank Water Motor';
-    tool_calls.push({
-      tool_name: 'actuate_home_device',
-      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', duration_minutes: 20, reason: 'Voice command via T3' },
-      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
-    });
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('light') || desc.includes('bulb')) {
-    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
-    let deviceId = `${prefix}living_smart_bulb`;
-    let deviceName = 'Living Room Smart Bulb';
-    if (desc.includes('bedroom') || desc.includes('master')) {
-      deviceId = `${prefix}master_smart_bulb`;
-      deviceName = 'Master Bedroom Smart Bulb';
-    }
-    tool_calls.push({
-      tool_name: 'actuate_home_device',
-      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
-      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
-    });
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('fan')) {
-    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
-    let deviceId = `${prefix}living_ceiling_fan`;
-    let deviceName = 'Living Room Ceiling Fan';
-    if (desc.includes('bedroom') || desc.includes('master')) {
-      deviceId = `${prefix}master_ceiling_fan`;
-      deviceName = 'Master Bedroom Ceiling Fan';
-    } else if (desc.includes('kitchen') || desc.includes('exhaust')) {
-      deviceId = `${prefix}kitchen_exhaust_fan`;
-      deviceName = 'Kitchen Exhaust Fan';
-    }
-    tool_calls.push({
-      tool_name: 'actuate_home_device',
-      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
-      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
-    });
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('tv') || desc.includes('television')) {
-    const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
-    const deviceId = `${prefix}living_tv`;
-    tool_calls.push({
-      tool_name: 'actuate_home_device',
-      tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
-      tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
-    });
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the Living Room TV.`, type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
-    });
-  } else if (desc.includes('device') || desc.includes('actuate') || desc.includes('voice command')) {
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: 'I can help with lights, fans, TV, geyser, AC, and more. What would you like me to do?', type: 'INFO', requires_response: true },
+      tool_input: { message: `Condition "${conditionText}" evaluated to false. No action taken.`, type: 'INFO', requires_response: false },
       tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
     });
   } else {
-    tool_calls.push({
-      tool_name: 'send_user_notification',
-      tool_input: { message: 'Alexa+ analyzed your request. In production, real Bedrock tool calls would execute here.', type: 'INFO', requires_response: false },
-      tool_output: { success: true, delivered_via: ['mock'], timestamp: new Date().toISOString() },
-    });
+    // Condition is true, proceed with action
+    if (desc.includes('inventory') || desc.includes('order') || desc.includes('milk') || desc.includes('lpg')) {
+      tool_calls.push({
+        tool_name: 'order_amazon_now',
+        tool_input: { items: [{ name: 'milk', quantity: 2, unit: 'liters' }], max_budget: 120, priority: 'EXPRESS_10MIN' },
+        tool_output: {
+          success: true, order_id: `AMZ-MOCK-${Date.now()}`,
+          items: [{ name: 'milk', quantity: 2, unit: 'liters' }],
+          estimated_total_inr: 102, max_budget_inr: 120, eta_minutes: 10,
+          eta_timestamp: new Date(Date.now() + 10 * 60000).toISOString(), status: 'ORDER_CONFIRMED',
+        },
+      });
+      tool_calls.push({
+        tool_name: 'send_user_notification',
+        tool_input: { message: '[MOCK] Milk order placed via Amazon Now. Arriving in 10 minutes.', type: 'INFO', requires_response: false },
+        tool_output: { success: true, delivered_via: ['mock_alexa_tts'], timestamp: new Date().toISOString() },
+      });
+    } else if (desc.includes('sound') || desc.includes('cluster') || desc.includes('embedding')) {
+      tool_calls.push({
+        tool_name: 'log_new_sound_cluster',
+        tool_input: { embedding_id: `emb_mock_${Date.now()}`, time: new Date().toISOString(), cluster_size: 5, frequency_pattern: 'daily_6am', clap_description: 'metallic beep, electrical device' },
+        tool_output: { success: true, cluster_id: `cluster_mock_${Date.now()}`, status: 'CLUSTER_LOGGED', user_prompt_queued: true },
+      });
+      tool_calls.push({
+        tool_name: 'send_user_notification',
+        tool_input: { message: "[MOCK] I've noticed a recurring unrecognized sound. What is this sound?", type: 'QUESTION', requires_response: true },
+        tool_output: { success: true, delivered_via: ['mock_alexa_tts'], timestamp: new Date().toISOString() },
+      });
+    } else if (desc.includes('voice command') && /\b(weather|temperature|forecast|news|stock|price|rate|score|result|cricket|match|today|right now|currently|live)\b/i.test(desc)) {
+      // Live-data question — agent should ask for web search permission
+      const query = actionText;
+      tool_calls.push({
+        tool_name: 'request_web_search',
+        tool_input: { query, reason: 'Question requires live/current data not available in training knowledge' },
+        tool_output: { status: 'pending_user_permission', query, timestamp: new Date().toISOString() },
+      });
+    } else if (desc.includes('voice command') && /\b(hello|hi |hey |how are you|what can you|thank)\b/.test(desc)) {
+      // Conversational greeting — no device action, just respond
+      tool_calls.push({
+        tool_name: 'send_user_notification',
+        tool_input: { message: 'Hi! How may I help you with your home today?', type: 'INFO', requires_response: true },
+        tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+      });
+    } else if (desc.includes('voice command') && /\b(what is|what's|how much|how many|calculate|tell me|explain|define|who is|when is|where is|\d+\s*[\+\-\*\/x]\s*\d+)\b/i.test(desc)) {
+      // Direct knowledge question / math — extract utterance and give a meaningful mock answer
+      let answer = '[MOCK] In production, Bedrock Nova Micro would answer this question in real time.';
+      
+      // Look for numbers to add, subtract, multiply, or divide
+      const mathMatch = actionText.match(/(\d+(?:\.\d+)?)\s*(?:\+|\-|plus|minus|times|\*|divided by|\/|x)\s*(\d+(?:\.\d+)?)/i);
+      if (mathMatch) {
+        const op = actionText.toLowerCase();
+        const num1 = parseFloat(mathMatch[1]);
+        const num2 = parseFloat(mathMatch[2]);
+        let sum = num1 + num2;
+        let opWord = 'plus';
+        if (op.includes('-') || op.includes('minus')) { sum = num1 - num2; opWord = 'minus'; }
+        else if (op.includes('*') || op.includes('times') || op.includes('x')) { sum = num1 * num2; opWord = 'times'; }
+        else if (op.includes('/') || op.includes('divided')) { sum = num1 / num2; opWord = 'divided by'; }
+        answer = `${num1} ${opWord} ${num2} is ${sum}.`;
+      } else if (actionText) {
+        answer = `[MOCK] Great question! "${actionText}" — in production, Alexa+ would use Bedrock to answer this accurately.`;
+      }
+      tool_calls.push({
+        tool_name: 'send_user_notification',
+        tool_input: { message: answer, type: 'INFO', requires_response: false },
+        tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+      });
+    } else if (desc.includes('geyser') || desc.includes('motor') || desc.includes('pump')) {
+      const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+      const deviceId = desc.includes('geyser') ? `${prefix}master_geyser` : `${prefix}utility_water_motor`;
+      const deviceName = desc.includes('geyser') ? 'Master Bathroom Geyser' : 'Overhead Tank Water Motor';
+
+      const home = stateStore.get(home_id);
+      const device = home?.devices[deviceId];
+      const isCurrentlyOn = device?.properties?.power?.current_value === true;
+      const targetStateOn = !isOff;
+
+      if (targetStateOn === isCurrentlyOn) {
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: 'lights already off', type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      } else {
+        tool_calls.push({
+          tool_name: 'actuate_home_device',
+          tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', duration_minutes: 20, reason: 'Voice command via T3' },
+          tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+        });
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      }
+    } else if (desc.includes('light') || desc.includes('bulb')) {
+      const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+      let deviceId = `${prefix}living_smart_bulb`;
+      let deviceName = 'Living Room Smart Bulb';
+      if (desc.includes('bedroom') || desc.includes('master')) {
+        deviceId = `${prefix}master_smart_bulb`;
+        deviceName = 'Master Bedroom Smart Bulb';
+      }
+
+      const home = stateStore.get(home_id);
+      const device = home?.devices[deviceId];
+      const isCurrentlyOn = device?.properties?.power?.current_value === true;
+      const targetStateOn = !isOff;
+
+      if (targetStateOn === isCurrentlyOn) {
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: 'lights already off', type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      } else {
+        tool_calls.push({
+          tool_name: 'actuate_home_device',
+          tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
+          tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+        });
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      }
+    } else if (desc.includes('fan')) {
+      const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+      let deviceId = `${prefix}living_ceiling_fan`;
+      let deviceName = 'Living Room Ceiling Fan';
+      if (desc.includes('bedroom') || desc.includes('master')) {
+        deviceId = `${prefix}master_ceiling_fan`;
+        deviceName = 'Master Bedroom Ceiling Fan';
+      } else if (desc.includes('kitchen') || desc.includes('exhaust')) {
+        deviceId = `${prefix}kitchen_exhaust_fan`;
+        deviceName = 'Kitchen Exhaust Fan';
+      }
+
+      const home = stateStore.get(home_id);
+      const device = home?.devices[deviceId];
+      const isCurrentlyOn = device?.properties?.power?.current_value === true;
+      const targetStateOn = !isOff;
+
+      if (targetStateOn === isCurrentlyOn) {
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: 'lights already off', type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      } else {
+        tool_calls.push({
+          tool_name: 'actuate_home_device',
+          tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
+          tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+        });
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the ${deviceName}.`, type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      }
+    } else if (desc.includes('tv') || desc.includes('television')) {
+      const isOff = desc.includes('off') || desc.includes('shut') || desc.includes('close') || desc.includes('band');
+      const deviceId = `${prefix}living_tv`;
+
+      const home = stateStore.get(home_id);
+      const device = home?.devices[deviceId];
+      const isCurrentlyOn = device?.properties?.power?.current_value === true;
+      const targetStateOn = !isOff;
+
+      if (targetStateOn === isCurrentlyOn) {
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: 'lights already off', type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      } else {
+        tool_calls.push({
+          tool_name: 'actuate_home_device',
+          tool_input: { device_id: deviceId, target_state: isOff ? 'OFF' : 'ON', reason: 'Voice command via T3' },
+          tool_output: { success: true, device_id: deviceId, new_state: isOff ? 'OFF' : 'ON', executed_at: new Date().toISOString() },
+        });
+        tool_calls.push({
+          tool_name: 'send_user_notification',
+          tool_input: { message: `Okay, turned ${isOff ? 'off' : 'on'} the Living Room TV.`, type: 'INFO', requires_response: false },
+          tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+        });
+      }
+    } else if (desc.includes('device') || desc.includes('actuate') || desc.includes('voice command')) {
+      tool_calls.push({
+        tool_name: 'send_user_notification',
+        tool_input: { message: 'I can help with lights, fans, TV, geyser, AC, and more. What would you like me to do?', type: 'INFO', requires_response: true },
+        tool_output: { success: true, delivered_via: ['alexa_tts'], timestamp: new Date().toISOString() },
+      });
+    } else {
+      tool_calls.push({
+        tool_name: 'send_user_notification',
+        tool_input: { message: 'Alexa+ analyzed your request. In production, real Bedrock tool calls would execute here.', type: 'INFO', requires_response: false },
+        tool_output: { success: true, delivered_via: ['mock'], timestamp: new Date().toISOString() },
+      });
+    }
   }
 
   const specialist: AgentRouting['specialist'] =

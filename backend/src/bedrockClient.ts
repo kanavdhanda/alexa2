@@ -382,7 +382,9 @@ After ordering, confirm what was ordered and ETA in one friendly sentence.`,
 Your role: safely actuate smart home devices.
 Available tool: actuate_home_device only.
 India context: Geyser duration ≤ 45 min. LPG leak → gas valve OFF immediately. Respect current home regime.
-Safety: CRITICAL class devices need explicit justification. Minimum necessary actuations only.`,
+Safety: CRITICAL class devices need explicit justification. Minimum necessary actuations only.
+Conditions: If the command includes a mathematical/logical condition (e.g. "if 4+5 is odd then..."), evaluate it. Only perform the action if the condition evaluates to true. If the condition is false, do not actuate, and reply that the condition is false.
+Smartness: Check the current device state in the Home State Snapshot. If you evaluate the condition to be true (or if there is no condition) and need to turn off a device (like lights) but it is already off, do NOT call actuate_home_device. Instead, reply precisely "lights already off". Similarly, if a device is already on and you are asked to turn it on, reply "lights already on" (or equivalent state text).`,
 
   KNOWLEDGE: `You are the Knowledge & Notification Specialist Agent for Alexa+ India.
 Your role: handle sound discovery, user questions, greetings, and safety alerts. Be brief — 1-2 sentences max.
@@ -478,7 +480,7 @@ Your ONLY job: classify this request and call route_to_specialist ONCE.
 
 Specialists:
 • COMMERCE — Amazon ordering, grocery, inventory replenishment
-• HOME_CONTROL — device actuation (lights, fans, AC, geyser, locks, TV, motor)
+• HOME_CONTROL — device actuation (lights, fans, AC, geyser, locks, TV, motor), including conditional actuation requests (e.g., "if 4+5 is odd then turn off light in living room")
 • KNOWLEDGE — sound discovery, greetings, capability questions, alerts, notifications
 
 ${homeContext}`;

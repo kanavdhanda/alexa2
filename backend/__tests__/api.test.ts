@@ -237,6 +237,27 @@ test('20 concurrent T0 geyser requests all succeed within 2s', async () => {
   expect(elapsed).toBeLessThan(2000);
 }, 5000);
 
+// ─── 12.5 Suggestions / Conditional logic tests ──────────────────────────────
+
+test('POST /api/simulate/voice_command conditional logic - condition is true and lights already off', async () => {
+  const res = await request(server)
+    .post('/api/simulate/voice_command')
+    .send({ home_id: HOME_ID, utterance: 'if 4+5 is odd then turn off light in living room', speaker_id: 'owner_1' });
+  expect(res.status).toBe(200);
+  expect(res.body.tier).toBe('T3');
+  // Since seeded home living bulb is powered off by default, it should say lights already off
+  expect(res.body.result.tool_calls[0].tool_input.message).toBe('lights already off');
+});
+
+test('POST /api/simulate/voice_command conditional logic - condition is false', async () => {
+  const res = await request(server)
+    .post('/api/simulate/voice_command')
+    .send({ home_id: HOME_ID, utterance: 'if 4+5 is even then turn off light in living room', speaker_id: 'owner_1' });
+  expect(res.status).toBe(200);
+  expect(res.body.tier).toBe('T3');
+  expect(res.body.result.tool_calls[0].tool_input.message).toContain('Condition "4+5 is even" evaluated to false');
+});
+
 // ─── 13. Concurrent load — mixed endpoints (T0 + voice + twin) ───────────────
 
 test('30 mixed concurrent requests all return 200 within 3s', async () => {

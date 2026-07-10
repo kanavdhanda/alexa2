@@ -424,6 +424,11 @@ export function runT1Engine(
       return null; // let T3 handle
     }
 
+    // Explicit no-match for conditional commands (e.g. "if ... then ...")
+    if (/\bif\b/i.test(utterance)) {
+      return null; // let T3 handle
+    }
+
     for (const pattern of SIMPLE_INTENT_PATTERNS) {
       for (const regex of pattern.patterns) {
         const match = utterance.match(regex);

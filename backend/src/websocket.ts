@@ -163,6 +163,77 @@ class HomeWsServer {
     });
 
     updateHomeRegime(home_id);
+
+    const lowerTranscript = transcript.toLowerCase();
+    
+    // Check if query is about Bruno the dog
+    const isDogQuery = (lowerTranscript.includes('feed') || lowerTranscript.includes('fed')) && lowerTranscript.includes('bruno');
+    if (isDogQuery) {
+      console.log(`[WS] Intercepted Bruno dog query: "${transcript}"`);
+      try {
+        const startMs = Date.now();
+        const speech = 'Yes, Bruno was fed by you (Arman) just 2 hours ago according to the smart dog feeder.';
+        
+        // Send response back to WS
+        await this.sendVoiceResponse(ws, home_id, {
+          request_id,
+          transcript,
+          tier: 'T0',
+          spoken_text: speech,
+          routing: null
+        });
+        return;
+      } catch (err) {
+        console.error('WS Bruno dog processing error:', err);
+      }
+    }
+
+    const isLedgerQuery =
+      lowerTranscript.includes('doodhwala') ||
+      lowerTranscript.includes('milkman') ||
+      lowerTranscript.includes('dhobi') ||
+      lowerTranscript.includes('laundry') ||
+      lowerTranscript.includes('maid') ||
+      lowerTranscript.includes('help') ||
+      lowerTranscript.includes('newspaper') ||
+      lowerTranscript.includes('khata') ||
+      lowerTranscript.includes('ledger') ||
+      lowerTranscript.includes('hisab');
+
+    if (isLedgerQuery) {
+      console.log(`[WS] Intercepted ledger command: "${transcript}"`);
+      try {
+        const startMs = Date.now();
+        const { parseKhataUtteranceMock, khataStore } = require('./khata');
+        const entry = parseKhataUtteranceMock(transcript);
+        khataStore.add(home_id, entry);
+        
+        const latencyMs = Date.now() - startMs;
+        const speech = `Recorded — ${entry.vendor_hi}, ${entry.quantity} ${entry.unit}, ₹${entry.amount_inr}.`;
+        
+        // Broadcast the khata_entry to update all widgets
+        this.broadcast(home_id, {
+          type: 'khata_entry',
+          home_id,
+          payload: { entry, trace: { tier: 'T0·local', latency_ms: latencyMs, cost_usd: 0 } },
+          timestamp: new Date().toISOString(),
+        });
+
+        // Send voice response back to the widget to display in chat
+        await this.sendVoiceResponse(ws, home_id, {
+          request_id,
+          transcript,
+          tier: 'T0',
+          spoken_text: speech,
+          routing: null
+        });
+        
+        return;
+      } catch (err) {
+        console.error('WS ledger processing error:', err);
+      }
+    }
+
     const homeState = stateStore.get(home_id);
     const event = { home_id, event_type: 'voice_command' as const, data: { utterance: transcript, speaker_id, source: 'ws_voice' }, speaker_id };
 

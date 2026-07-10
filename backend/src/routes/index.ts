@@ -9,7 +9,7 @@ import { getRegime, forceRegime, refreshRegime } from '../controllers/regimeCont
 import { runMiner, listProposedRules, confirmRule, rejectRule, listT0Rules } from '../controllers/minerController';
 import { textToSpeech, textToSpeechGet, speakEventResult, voiceConfig, demoPhrasesAudio, transcribeAudio } from '../controllers/voiceController';
 import { listModules, getModule, listCategories, getStoreStats, installModule, getInstalledModules, publishModule, generateModuleWithAI, getModuleTemplate } from '../controllers/appStoreController';
-import { logKhata, getKhataLedger, settleKhata } from '../controllers/khataController';
+import { logKhata, getKhataLedger, settleKhata, resetKhata } from '../controllers/khataController';
 import { buildScenarioRule, buildScenarioPlan } from '../controllers/scenarioBuilderController';
 import { DEMO_STEPS } from '../demoScript';
 import { getBufferedEvents, getLatestSeq } from '../websocket';
@@ -99,6 +99,7 @@ router.post('/scenario-builder/plan', buildScenarioPlan);
 router.post('/homes/:home_id/khata/log', logKhata);
 router.get('/homes/:home_id/khata/ledger', getKhataLedger);
 router.post('/homes/:home_id/khata/settle', settleKhata);
+router.post('/homes/:home_id/khata/reset', resetKhata);
 
 // ── Nightly batch miner (manual trigger) ─────────────────────────────────────
 router.post('/admin/run-batch', (_req, res) => {

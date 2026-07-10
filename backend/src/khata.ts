@@ -29,10 +29,10 @@ const HINDI_NUMS: Record<string, number> = {
 };
 
 const vendorMap: Record<string, { vendor: 'doodhwala' | 'dhobi' | 'maid' | 'newspaper'; vendor_hi: string; rate: number }> = {
-  doodhwala: { vendor: 'doodhwala', vendor_hi: 'दूधवाला', rate: 60 },
-  dhobi: { vendor: 'dhobi', vendor_hi: 'धोबी', rate: 30 },
-  maid: { vendor: 'maid', vendor_hi: 'नौकरानी', rate: 15 },
-  newspaper: { vendor: 'newspaper', vendor_hi: 'अखबार वाला', rate: 5 },
+  doodhwala: { vendor: 'doodhwala', vendor_hi: 'Milkman', rate: 60 },
+  dhobi: { vendor: 'dhobi', vendor_hi: 'Laundry (Dhobi)', rate: 30 },
+  maid: { vendor: 'maid', vendor_hi: 'House Help (Maid)', rate: 15 },
+  newspaper: { vendor: 'newspaper', vendor_hi: 'Newspaper', rate: 5 },
 };
 
 export function parseKhataUtteranceMock(utterance: string): KhataEntry {
