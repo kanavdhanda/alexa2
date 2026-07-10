@@ -7,7 +7,7 @@ import { runSupervisorAgent } from '../bedrockClient';
 import { semanticCache, buildCacheKey } from '../semanticCache';
 import { updateHomeRegime } from '../regimeEngine';
 import { wsServer } from '../websocket';
-import { buildSpokenResponse, synthesizeSpeech } from '../voiceModule';
+import { synthesizeSpeech, buildSpokenResponse, cleanSpokenResponse } from '../voiceModule';
 import { financialSafety } from '../financialSafety';
 import { buildTrace } from '../trace';
 
@@ -183,7 +183,8 @@ export async function handleEvent(req: Request, res: Response) {
 
     if (voice_response) {
       try {
-        const spokenText = buildSpokenResponse('T3', t3Result, home_id);
+        let spokenText = buildSpokenResponse('T3', t3Result, home_id);
+        spokenText = cleanSpokenResponse(spokenText);
         response.voice = await synthesizeSpeech(spokenText);
         response.spoken_text = spokenText;
       } catch (e: any) {

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { synthesizeSpeech, buildSpokenResponse, voiceModule, INDIA_VOICES, VoiceOption, transcribeAudioWithGroq } from '../voiceModule';
+import { synthesizeSpeech, buildSpokenResponse, voiceModule, INDIA_VOICES, VoiceOption, transcribeAudioWithGroq, cleanSpokenResponse, translateToEnglish, translateFromEnglish } from '../voiceModule';
 import { financialSafety } from '../financialSafety';
 import { semanticCache } from '../semanticCache';
 import { stateStore } from '../stateStore';
@@ -156,8 +156,23 @@ export async function transcribeAudio(req: Request, res: Response) {
     }
   }
 
+  // 1. Translation Layer — Translate user command to English for the controller
+  let originalTranscript = transcript;
+  let originalLanguage = 'en';
+
+  if (transcript && !transcript.startsWith('[MOCK')) {
+    try {
+      const translation = await translateToEnglish(transcript);
+      transcript = translation.englishText;
+      originalLanguage = translation.detectedLanguage;
+      console.log(`[Translation] STT: "${originalTranscript}" (Detected: ${originalLanguage}) -> English: "${transcript}"`);
+    } catch (err) {
+      console.error('[Translation] Translate to English error:', err);
+    }
+  }
+
   if (!auto_route) {
-    return res.json({ transcript, stt_is_mock, ...(stt_debug && { stt_debug }), home_id });
+    return res.json({ transcript: originalTranscript, stt_is_mock, ...(stt_debug && { stt_debug }), home_id, language: originalLanguage });
   }
 
   // Route transcript as a voice_command event through the full T0→T1→T3 cascade
@@ -172,17 +187,45 @@ export async function transcribeAudio(req: Request, res: Response) {
   } as Request;
 
   // Capture the response from handleEvent by wrapping res
-  const chunks: Buffer[] = [];
   let statusCode = 200;
   const fakeRes = {
-    json: (body: any) => {
+    json: async (eventBody: any) => {
+      let finalSpokenText = eventBody.spoken_text || '';
+      
+      // Clean up raw tags/JSON in spoken response text
+      finalSpokenText = cleanSpokenResponse(finalSpokenText);
+      eventBody.spoken_text = finalSpokenText;
+
+      // 2. Localization Layer — Translate response back if necessary
+      if (originalLanguage && originalLanguage !== 'en' && originalLanguage !== 'english' && !eventBody.error) {
+        try {
+          console.log(`[Translation] Translating response back to: ${originalLanguage}`);
+          const translatedResponse = await translateFromEnglish(finalSpokenText, originalLanguage);
+          console.log(`[Translation] English: "${finalSpokenText}" -> ${originalLanguage}: "${translatedResponse}"`);
+          eventBody.spoken_text = translatedResponse;
+          
+          if (voice_response && translatedResponse) {
+            eventBody.voice = await synthesizeSpeech(translatedResponse);
+          }
+        } catch (e: any) {
+          console.error('[Translation] Re-synthesis / translation back failed:', e);
+        }
+      } else if (voice_response && finalSpokenText) {
+        // If it was English, but finalSpokenText was modified by cleanup, we should re-synthesize TTS to match the cleaned text
+        try {
+          eventBody.voice = await synthesizeSpeech(finalSpokenText);
+        } catch (e: any) {
+          console.error('[Translation] English re-synthesis failed:', e);
+        }
+      }
+
       return res.json({
         audio_path: 'live',
-        transcript,
+        transcript: originalTranscript,
         stt_is_mock,
         ...(stt_debug && { stt_debug }),
-        language,
-        event_result: body,
+        language: originalLanguage,
+        event_result: eventBody,
       });
     },
     status: (code: number) => { statusCode = code; return fakeRes; },
@@ -192,6 +235,6 @@ export async function transcribeAudio(req: Request, res: Response) {
   try {
     return await handleEvent(fakeReq, fakeRes);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Event routing failed', detail: err.message, transcript });
+    return res.status(500).json({ error: 'Event routing failed', detail: err.message, transcript: originalTranscript });
   }
 }

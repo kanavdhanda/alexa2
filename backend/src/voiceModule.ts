@@ -357,3 +357,132 @@ export const voiceModule = {
   buildSpokenResponse,
   isMockMode: () => IS_MOCK,
 };
+
+// ─── cleanSpokenResponse ─────────────────────────────────────────────────────
+export function cleanSpokenResponse(text: string): string {
+  if (!text) return '';
+  
+  let clean = text.trim();
+
+  // Remove XML/HTML-like tags
+  clean = clean.replace(/<[^>]+>/g, ' ');
+
+  // Extract "message" from JSON if present
+  const messageMatch = clean.match(/"message"\s*:\s*"([^"]+)"/);
+  if (messageMatch && messageMatch[1]) {
+    return messageMatch[1].trim();
+  }
+
+  // Extract "explanation" from JSON if present
+  const explanationMatch = clean.match(/"explanation"\s*:\s*"([^"]+)"/);
+  if (explanationMatch && explanationMatch[1]) {
+    return explanationMatch[1].trim();
+  }
+
+  // Remove any remaining braces or JSON noise if it looks like broken JSON
+  if (clean.includes('{') || clean.includes('}')) {
+    try {
+      const jsonStart = clean.indexOf('{');
+      const jsonEnd = clean.lastIndexOf('}');
+      if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+        const potentialJson = clean.substring(jsonStart, jsonEnd + 1);
+        const parsed = JSON.parse(potentialJson);
+        if (parsed.message) return String(parsed.message).trim();
+        if (parsed.explanation) return String(parsed.explanation).trim();
+        if (parsed.text) return String(parsed.text).trim();
+      }
+    } catch (e) {
+      clean = clean.replace(/[\{\}\[\]"']/g, '').trim();
+    }
+  }
+
+  return clean.replace(/\s+/g, ' ').trim();
+}
+
+// ─── Translation & Localization Helpers ───────────────────────────────────────
+export async function translateToEnglish(text: string): Promise<{ englishText: string; detectedLanguage: string }> {
+  const apiKey = getGroqApiKey();
+  if (!apiKey) return { englishText: text, detectedLanguage: 'en' };
+
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an Indian translator. Translate the text to clear English if it contains Hindi, Hinglish, Tamil, Telugu, or any other regional language. If already in English, return it unchanged.
+Also detect the input language style (e.g. 'hinglish', 'hindi', 'tamil', 'english').
+
+Return ONLY valid JSON:
+{"englishText": "translated text", "detectedLanguage": "hinglish|hindi|tamil|english|etc"}`
+          },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.1,
+        response_format: { type: "json_object" }
+      }),
+    });
+
+    if (response.ok) {
+      const resJson = await response.json() as any;
+      const content = resJson.choices?.[0]?.message?.content;
+      if (content) {
+        const parsed = JSON.parse(content);
+        return {
+          englishText: parsed.englishText || text,
+          detectedLanguage: parsed.detectedLanguage || 'en',
+        };
+      }
+    }
+  } catch (e) {
+    console.error('[Translation] Translate to English failed:', e);
+  }
+  return { englishText: text, detectedLanguage: 'en' };
+}
+
+export async function translateFromEnglish(text: string, targetLanguage: string): Promise<string> {
+  if (targetLanguage === 'en' || targetLanguage === 'english') return text;
+  
+  const apiKey = getGroqApiKey();
+  if (!apiKey) return text;
+
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages: [
+          {
+            role: 'system',
+            content: `You are an Indian translator for a smart home assistant. Translate the English response to "${targetLanguage}".
+Keep the tone natural and polite. 1-2 sentences maximum.
+If target is Hinglish, write in Hinglish (Latin alphabet/English letters, e.g. "Maine geyser band kar diya hai").`
+          },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.2,
+      }),
+    });
+
+    if (response.ok) {
+      const resJson = await response.json() as any;
+      const content = resJson.choices?.[0]?.message?.content;
+      if (content) {
+        return content.trim();
+      }
+    }
+  } catch (e) {
+    console.error('[Translation] Translate from English failed:', e);
+  }
+  return text;
+}
