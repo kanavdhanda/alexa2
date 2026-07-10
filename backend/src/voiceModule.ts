@@ -106,7 +106,7 @@ async function synthesizeSarvam(text: string): Promise<TtsResult> {
     body: JSON.stringify({
       inputs: [safeText],
       target_language_code: 'hi-IN',
-      speaker: 'anushka',
+      speaker: process.env.SARVAM_SPEAKER || 'anushka',
       pitch: 0,
       pace: 1.05,
       loudness: 1.5,
@@ -127,7 +127,7 @@ async function synthesizeSarvam(text: string): Promise<TtsResult> {
   return {
     audio_base64: data.audios[0],
     content_type: 'audio/wav',
-    voice_used: 'sarvam-anushka',
+    voice_used: `sarvam-${process.env.SARVAM_SPEAKER || 'anushka'}`,
     character_count: text.length,
     is_mock: false,
     duration_estimate_ms: Math.ceil((text.length / 15) * 1000),
@@ -206,7 +206,8 @@ export async function synthesizeSpeech(
   console.log('[TTS] AWS_ACCESS_KEY_ID:', process.env.AWS_ACCESS_KEY_ID ? `${process.env.AWS_ACCESS_KEY_ID.slice(0, 4)}...` : '(not set)');
   console.log('[TTS] SARVAM_API_KEY:', process.env.SARVAM_API_KEY ? 'set' : '(not set)');
 
-  if (process.env.SARVAM_API_KEY) {
+  const ttsEngine = process.env.TTS_ENGINE || 'sarvam';
+  if (process.env.SARVAM_API_KEY && ttsEngine === 'sarvam') {
     try {
       return await synthesizeSarvam(text);
     } catch (err) {
