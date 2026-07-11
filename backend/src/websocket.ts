@@ -149,7 +149,7 @@ class HomeWsServer {
 
   /** Process a voice_command from the browser. T0 is handled on the browser; here we run T1 → T3. */
   private async handleVoiceCommand(ws: WebSocket, home_id: string, payload: any) {
-    const { transcript, speaker_id = 'owner_1', request_id } = payload ?? {};
+    const { transcript, speaker_id = 'owner_1', request_id, installed_skills = [] } = payload ?? {};
     if (!transcript) return;
 
     console.log(`[WS] voice_command home=${home_id} transcript="${transcript}"`);
@@ -282,6 +282,7 @@ class HomeWsServer {
       const anomalyDesc = `Voice command: "${transcript}". Speaker: ${speaker_id}. Requires complex NLU + possible agentic action beyond T1 intent patterns.`;
       const t3Result = await runSupervisorAgent({
         home_id, anomaly_description: anomalyDesc, home_state_snapshot: snapshot, event_data: { utterance: transcript },
+        installed_skills,
       });
 
       const latencyMs = Date.now() - t3Start;

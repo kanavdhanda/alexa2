@@ -371,6 +371,45 @@ const SPECIALIST_TOOLS: Record<Specialist, Tool[]> = {
   KNOWLEDGE:    [SUPERVISOR_TOOLS[2], SUPERVISOR_TOOLS[3], REQUEST_WEB_SEARCH_TOOL], // log_new_sound_cluster + send_user_notification + request_web_search
 };
 
+// ─── Skill-gated tools ─────────────────────────────────────────────────────────
+// Only exposed to the model when the frontend reports the matching skill as installed
+// (SmartphoneWidget's Skills & Apps store). Proof of concept: Philips Hue scenes.
+
+const HUE_SCENE_TOOL: Tool = {
+  toolSpec: {
+    name: 'set_hue_scene',
+    description: 'Philips Hue: set a lighting scene (brightness + color temperature) on a light device. Requires the Philips Hue Smart Lights skill to be installed.',
+    inputSchema: {
+      json: {
+        type: 'object',
+        properties: {
+          device_id: { type: 'string' },
+          scene_name: { type: 'string', enum: ['relax', 'concentrate', 'energize', 'nightlight'] },
+          brightness: { type: 'number', description: '0-100' },
+          color_temp: { type: 'number', description: 'Kelvin, 2700-6500' },
+        },
+        required: ['device_id', 'scene_name'],
+      },
+    },
+  },
+};
+
+const SKILL_TOOLS: Record<string, Tool> = {
+  'philips-hue': HUE_SCENE_TOOL,
+};
+
+function getToolsForSpecialist(specialist: Specialist, installedSkills: string[] = []): Tool[] {
+  const extra = installedSkills.map((id) => SKILL_TOOLS[id]).filter(Boolean);
+  return extra.length ? [...SPECIALIST_TOOLS[specialist], ...extra] : SPECIALIST_TOOLS[specialist];
+}
+
+const HUE_SCENE_PRESETS: Record<string, { brightness: number; color_temp: number }> = {
+  relax: { brightness: 40, color_temp: 2700 },
+  concentrate: { brightness: 100, color_temp: 6500 },
+  energize: { brightness: 100, color_temp: 5500 },
+  nightlight: { brightness: 5, color_temp: 2700 },
+};
+
 const SPECIALIST_SYSTEM_PROMPTS: Record<Specialist, string> = {
   COMMERCE: `You are the Commerce Specialist Agent for Alexa+ India.
 Your role: fulfil Amazon Now/Fresh orders and inventory replenishment.
@@ -429,6 +468,20 @@ async function executeTool(
     return {
       success: true, device_id: tool_input.device_id, property, new_state: tool_input.target_state,
       executed_at: new Date().toISOString(), message: `${tool_input.device_id} ${property}=${tool_input.target_state}. ${tool_input.reason || ''}`,
+    };
+  }
+
+  if (tool_name === 'set_hue_scene') {
+    const preset = HUE_SCENE_PRESETS[tool_input.scene_name] ?? { brightness: undefined, color_temp: undefined };
+    const brightness = tool_input.brightness ?? preset.brightness;
+    const color_temp = tool_input.color_temp ?? preset.color_temp;
+    stateStore.setDeviceProperty(home_id, tool_input.device_id, 'brightness', brightness);
+    stateStore.setDeviceProperty(home_id, tool_input.device_id, 'color_temp', color_temp);
+    stateStore.setDeviceProperty(home_id, tool_input.device_id, 'power', true);
+    return {
+      success: true, device_id: tool_input.device_id, scene_name: tool_input.scene_name,
+      brightness, color_temp, executed_at: new Date().toISOString(),
+      message: `${tool_input.device_id} set to Hue scene "${tool_input.scene_name}" (${brightness}%, ${color_temp}K).`,
     };
   }
 
@@ -533,7 +586,7 @@ async function runSpecialistAgent(
   authContext?: AuthorizationContext,
 ): Promise<{ tool_calls: any[]; reasoning: string; _fallbackModel?: string }> {
   const systemPrompt = SPECIALIST_SYSTEM_PROMPTS[specialist];
-  const tools = SPECIALIST_TOOLS[specialist];
+  const tools = getToolsForSpecialist(specialist, input.installed_skills);
 
   const userMessage = `T3 ESCALATION — home_id: ${input.home_id}
 
@@ -619,6 +672,7 @@ export interface SupervisorInput {
   home_state_snapshot: any;
   event_data: any;
   room_type?: string;
+  installed_skills?: string[];
 }
 
 export { SupervisorResult };
