@@ -6,3 +6,5 @@
 > This repo contains only the Express.js backend (`backend/`).
 
 ---
+
+<!-- Security scan triggered at 2026-10-07 14:38:31 -->
